@@ -207,12 +207,41 @@ Each project has its own structure based on specific needs:
   - Different GPU/CPU requirements
   - Different CI/CD approaches
 
-### Integrated Techniques
+### Integrated Techniques & Practices
 Rather than standalone technique folders, concepts are integrated throughout projects:
 - **Transfer Learning:** Used in projects where pre-trained models accelerate training
 - **Data Augmentation:** Customized per project based on domain requirements
 - **Model Optimization:** Applied during deployment phase (quantization, pruning, distillation)
 - **Model Deployment:** Cloud, edge, or local based on use case
+- **Experiment Tracking:** Most projects integrate observability tools for tracking experiments, models, and parameters
+
+### Experiment Tracking & Observability
+
+Most projects include experiment tracking to monitor training progress, compare models, and maintain reproducibility:
+
+**MLflow**
+- Lightweight, open-source experiment tracking
+- Logs parameters, metrics, and artifacts
+- Model registry for version control
+- Easy integration with existing workflows
+- Suitable for local and self-hosted setups
+
+**Weights & Biases (W&B)**
+- Cloud-based experiment tracking platform
+- Real-time visualization and collaboration
+- Hyperparameter sweeps and optimization
+- Model versioning and artifact management
+- Rich dashboards and reporting capabilities
+
+**What Gets Tracked:**
+- Training/validation metrics (loss, accuracy, etc.)
+- Hyperparameters and model configuration
+- Model artifacts and checkpoints
+- Dataset information and preprocessing details
+- Training duration and hardware usage
+- Visualizations and sample predictions
+
+Each project's README specifies which observability tool is used and how to access/configure it.
 
 ## 🚀 Getting Started
 
@@ -311,6 +340,7 @@ Each project includes:
 - Transfer learning and fine-tuning
 - Data augmentation strategies
 - Loss functions and metrics
+- Experiment tracking and observability (MLflow, Weights & Biases)
 - Deployment and productionization
 
 ## 🛠️ Notes
