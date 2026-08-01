@@ -5,14 +5,21 @@ parameters, and model artifacts. Enables reproducible, comparable experiments.
 """
 
 import argparse
+import sys
 import time
-import numpy as np
+from pathlib import Path
+
 import mlflow
+import numpy as np
 from tensorflow.keras.callbacks import Callback
 
-from tensorflow_cnn_data import load_mnist
-from tensorflow_cnn_models import MNISTCNNModel
-from tensorflow_cnn_evaluate import compute_metrics
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from tensorflow.cnn.data import load_mnist
+from tensorflow.cnn.evaluate import compute_metrics
+from tensorflow.cnn.models import MNISTCNNModel
 from utils.mlflow_config import MLflowConfig
 
 
@@ -122,7 +129,7 @@ def train_cnn(
         y_test_labels = np.argmax(y_test, axis=1)
 
         # Compute detailed metrics
-        precision, recall, f1 = compute_metrics(y_test_labels, y_pred)
+        _, precision, recall, f1 = compute_metrics(y_test_labels, y_pred)
 
         # Calculate inference time (ms per batch)
         batch_test_data = x_test[:batch_size]

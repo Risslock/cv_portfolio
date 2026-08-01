@@ -5,15 +5,22 @@ parameters, and model artifacts. Enables reproducible, comparable experiments.
 """
 
 import argparse
+import sys
 import time
+from pathlib import Path
+
+import mlflow
 import numpy as np
 import torch
 import torch.nn as nn
-import mlflow
 
-from pytorch_cnn_data import load_mnist
-from pytorch_cnn_models import MNISTCNNModel
-from pytorch_cnn_evaluate import compute_metrics
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from pytorch.cnn.data import load_mnist
+from pytorch.cnn.evaluate import compute_metrics
+from pytorch.cnn.models import MNISTCNNModel
 from utils.mlflow_config import MLflowConfig
 
 
@@ -193,7 +200,7 @@ def train_cnn(
         all_labels = np.array(all_labels)
 
         # Compute detailed metrics
-        precision, recall, f1 = compute_metrics(all_labels, all_predictions)
+        _, precision, recall, f1 = compute_metrics(all_labels, all_predictions)
 
         # Calculate inference time (ms per batch)
         batch_test_data = next(iter(test_loader))[0][:batch_size].to(device)
