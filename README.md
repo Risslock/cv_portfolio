@@ -117,7 +117,34 @@ Precision agriculture through semantic segmentation. Analyzing satellite or dron
 
 ---
 
-### 6. **CNN Explainability: Understanding Model Decisions** 🔍
+### 6. **Satellite Image Segmentation: Water & Irrigation Monitoring** 💧
+**Status:** Planned | **Difficulty:** Intermediate-Advanced | **Framework:** PyTorch/TensorFlow
+
+Remote sensing and precision water management through multispectral satellite image segmentation. Analyzing Sentinel-2 and Landsat-8 imagery to segment water bodies, detect irrigation patterns, and monitor water resource utilization.
+
+**Why this project:**
+- Critical application in climate change monitoring and resource management
+- Multispectral data processing and spectral index computation
+- Global-scale environmental monitoring
+- Practical applications in agriculture and hydrology
+
+**Key Topics:**
+- Multispectral image processing (NDWI, SWI indices)
+- Working with Sentinel-2 and Landsat-8 data via Google Earth Engine
+- Segmentation with deep learning (U-Net, DeepLabV3)
+- Handling large-scale geospatial data
+- Time-series analysis for water dynamics monitoring
+
+**Datasets & Resources:**
+- Sentinel-2 Water Segmentation dataset (GitHub public dataset)
+- IRRISIGHT (irrigation-focused multimodal dataset)
+- Landsat Irish Coastal Segmentation (LICS)
+- RiverScope (densely labeled river segmentation)
+- Global Surface Water dataset (multi-sensor Landsat-8 + Sentinel-2)
+
+---
+
+### 7. **CNN Explainability: Understanding Model Decisions** 🔍
 **Status:** Planned | **Difficulty:** Intermediate
 
 Making deep learning interpretable through visualization techniques. Understanding what features CNNs learn and why they make specific predictions.
@@ -135,7 +162,7 @@ Making deep learning interpretable through visualization techniques. Understandi
 
 ---
 
-### 7. **Style Transfer: Artistic Image Generation** 🎨
+### 8. **Style Transfer: Artistic Image Generation** 🎨
 **Status:** Planned | **Difficulty:** Intermediate | **Framework:** PyTorch
 
 Transferring artistic style from one image to another. Combining content of one image with style of another to create unique visual outputs.
@@ -153,7 +180,7 @@ Transferring artistic style from one image to another. Combining content of one 
 
 ---
 
-### 8. **Image Generation: Generative Models** 🖼️
+### 9. **Image Generation: Generative Models** 🖼️
 **Status:** Planned | **Difficulty:** Advanced | **Framework:** PyTorch
 
 Creating new images from learned distributions. Implementing generative models (VAE, GAN, Diffusion) to generate realistic images.
@@ -171,7 +198,7 @@ Creating new images from learned distributions. Implementing generative models (
 
 ---
 
-### 9. **Object Tracking: Multi-Object Tracking** 🎬
+### 10. **Object Tracking: Multi-Object Tracking** 🎬
 **Status:** Planned | **Difficulty:** Advanced
 
 Tracking objects across video frames. Maintaining identity and trajectory for multiple objects in dynamic scenes.
@@ -315,6 +342,7 @@ Each project's README contains specific instructions for:
 - [ ] Object Detection (YOLO) - Real-time detection
 - [ ] Semantic Segmentation (Medical) - Healthcare applications
 - [ ] Semantic Segmentation (Agricultural) - Remote sensing
+- [ ] Satellite Image Segmentation (Water/Irrigation) - Geospatial analysis
 - [ ] CNN Explainability - Model interpretation
 - [ ] Style Transfer - Artistic generation
 - [ ] Image Generation - Generative models
