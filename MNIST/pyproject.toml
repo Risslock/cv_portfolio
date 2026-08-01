@@ -63,6 +63,3 @@ disable = [
 testpaths = ["tests"]
 python_files = "test_*.py"
 addopts = "--cov=. --cov-report=html"
-
-[tool.uv]
-python-version = "3.10"

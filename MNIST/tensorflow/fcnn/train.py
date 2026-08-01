@@ -1,37 +1,46 @@
 import argparse
 import datetime
 import os
+import sys
 import time
 
 import matplotlib.pyplot as plt
-import mlflow
-import mlflow.keras
 import numpy as np
-from model import TF_FCNN
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 
+# Import TensorFlow EARLY (before local model import)
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from tensorflow.keras.datasets import mnist
 from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.keras.utils import to_categorical
 from tensorflow.random import set_seed
 
-FRAMEWORK = "TensorFlow"
-ARCHITECTURE = "FCNN"
-MLFLOW_TRACKING_URI = "sqlite:///mlflow.db"
+# Setup path for utils imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
+from utils.mlflow_config import MLflowConfig
+from utils.metrics import calculate_metrics
+
+# Now import local model (TensorFlow already loaded)
+from model import TF_FCNN
+
+FRAMEWORK = "tensorflow"
+ARCHITECTURE = "fcnn"
+MLFLOW_TRACKING_URI = "sqlite:///./mlflow.db"
 MLFLOW_EXPERIMENT_NAME = f"mnist_{FRAMEWORK}_{ARCHITECTURE}"
 RANDOM_SEED = 42
-NUM_CLASSES = 10  # MNIST has 10 classes (0-9)
+NUM_CLASSES = 10
+NUM_CONV_BLOCKS = 0
+CONV_FILTERS_INITIAL = 0
+DENSE_UNITS = 128
+DROPOUT_RATE = 0.2
+LOSS_FUNCTION = "categorical_crossentropy"
 
 
-# Create arguments for the training function from command line
 parser = argparse.ArgumentParser(
     description="Train a FCNN model on MNIST dataset with MLflow tracking"
 )
 parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
-parser.add_argument(
-    "--batch_size", type=int, default=32, help="Batch size for training"
-)
+parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training")
 parser.add_argument(
     "--learning_rate", type=float, default=0.001, help="Learning rate for optimizer"
 )
@@ -45,123 +54,68 @@ parser.add_argument(
 args = parser.parse_args()
 
 
-def measure_inference_time(model, input_size: int, num_iterations: int = 100) -> float:
-    """
-    Measure average inference time on a single example.
-
-    Runs inference multiple times on dummy data to get average time.
-    Useful for benchmarking model performance on target hardware.
-
-    Args:
-        model: Trained Keras model
-        input_size (int): Size of input features (e.g., 784 for MNIST)
-        num_iterations (int): Number of inference runs (default: 100)
-
-    Returns:
-        float: Average inference time in milliseconds
-    """
-    # Create dummy input with batch size 1
+def measure_inference_time(
+    model, input_size: int, num_iterations: int = 100
+) -> float:
+    """Measure average inference time in milliseconds per batch."""
     dummy_input = np.zeros((1, input_size), dtype=np.float32)
-
-    # Warm-up pass to exclude compilation overhead
     _ = model(dummy_input, training=False)
 
-    # Measure inference time over multiple iterations
     start_time = time.time()
     for _ in range(num_iterations):
         _ = model(dummy_input, training=False)
     end_time = time.time()
 
-    # Calculate average time in milliseconds
-    total_time = (end_time - start_time) * 1000  # Convert to milliseconds
+    total_time = (end_time - start_time) * 1000
     avg_time_ms = total_time / num_iterations
-
     return avg_time_ms
 
 
 def load_mnist_data():
-    """
-    Load the MNIST dataset and preprocess it for training.
-
-    Returns:
-        tuple: A tuple containing the preprocessed training and testing data.
-    """
+    """Load and preprocess MNIST dataset."""
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
-
-    # Preprocess the data: reshape to 1D and normalize
     x_train = x_train.reshape(-1, 28 * 28).astype("float32") / 255.0
     x_test = x_test.reshape(-1, 28 * 28).astype("float32") / 255.0
-
-    # Convert labels to one-hot encoding
     y_train = to_categorical(y_train, 10)
     y_test = to_categorical(y_test, 10)
-
     return (x_train, y_train), (x_test, y_test)
 
 
 def main():
-    """
-    Train a FCNN model on MNIST dataset with MLflow experiment tracking.
-
-    This function:
-    1. Loads and preprocesses MNIST data
-    2. Creates and compiles a FCNN model
-    3. Trains with early stopping and model checkpointing
-    4. Evaluates on test set
-    5. Logs all metrics, parameters, and artifacts to MLflow
-    6. Saves training history and visualization plots
-    """
-
-    # Set random seeds for reproducibility
+    """Train FCNN with standardized MLflow tracking."""
     np.random.seed(RANDOM_SEED)
     set_seed(RANDOM_SEED)
 
-    # Define timestamp for the experiment
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    # Create result directory
-    result_dir = f"results/{FRAMEWORK.lower()}_{ARCHITECTURE.lower()}/{timestamp}"
+    result_dir = f"results/{FRAMEWORK}_{ARCHITECTURE}/{timestamp}"
     os.makedirs(result_dir, exist_ok=True)
     print(f"\n{'=' * 60}")
     print(f"Results will be saved to: {result_dir}")
     print(f"{'=' * 60}\n")
 
-    # Set MLflow tracking URI to sqlite
-    mlflow.set_tracking_uri("sqlite:///./mlflow.db")
+    # Initialize MLflow
+    mlflow_cfg = MLflowConfig(MLFLOW_EXPERIMENT_NAME, MLFLOW_TRACKING_URI)
+    print(f"MLflow Experiment: {MLFLOW_EXPERIMENT_NAME}\n")
 
-    # Create or set MLflow experiment
-    experiment = mlflow.get_experiment_by_name(MLFLOW_EXPERIMENT_NAME)
-    if experiment is None:
-        experiment_id = mlflow.create_experiment(MLFLOW_EXPERIMENT_NAME)
-    else:
-        experiment_id = experiment.experiment_id
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    print(f"MLflow Experiment: {MLFLOW_EXPERIMENT_NAME} (ID: {experiment_id})\n")
-
-    # Load and preprocess data
+    # Load data
     (x_train, y_train), (x_test, y_test) = load_mnist_data()
     print("Data Loaded:")
     print(f"  Training: shape={x_train.shape}, labels={y_train.shape}")
     print(f"  Testing:  shape={x_test.shape}, labels={y_test.shape}")
 
-    # Derive input size from data (don't hardcode it)
     input_size = x_train.shape[1]
     print(f"  Input size: {input_size}, Classes: {NUM_CLASSES}\n")
 
-    # Create and compile the model
+    # Create and compile model
     input_shape = (input_size,)
     model = TF_FCNN(input_shape=input_shape, num_classes=NUM_CLASSES)
 
-    # Select optimizer based on command line argument
     if args.optimizer.lower() == "adam":
         optimizer = Adam(learning_rate=args.learning_rate)
-        print(f"Using Adam optimizer with learning rate: {args.learning_rate}")
     elif args.optimizer.lower() == "sgd":
         optimizer = SGD(learning_rate=args.learning_rate)
-        print(f"Using SGD optimizer with learning rate: {args.learning_rate}")
     else:
-        raise ValueError(
-            f"Unknown optimizer: {args.optimizer}. Choose 'adam' or 'sgd'."
-        )
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
 
     model.compile(
         optimizer=optimizer,
@@ -170,41 +124,50 @@ def main():
     )
     print("Model compiled successfully.\n")
 
-    # Initialize layers with a dummy forward pass (required for subclassed Models)
-    print("Initializing model layers...")
     dummy_input = np.zeros((1, input_size))
     _ = model(dummy_input, training=False)
-    print("Layers initialized.\n")
-
+    print("Model initialized.\n")
     print("Model Architecture:")
     model.summary()
     print()
 
-    with mlflow.start_run():
-        # Log tags for experiment filtering
-        mlflow.set_tags(
-            {
-                "framework": FRAMEWORK,
-                "architecture": ARCHITECTURE,
-                "project": "mnist_digits",
-            }
-        )
+    # Start MLflow run
+    mlflow_cfg.start_run(
+        tags={
+            "framework": FRAMEWORK,
+            "architecture": ARCHITECTURE,
+            "project": "mnist_digits",
+        }
+    )
 
-        # Log hyperparameters
-        mlflow.log_params(vars(args))
-        mlflow.log_param("random_seed", RANDOM_SEED)
-        mlflow.log_param("input_size", input_size)
-        mlflow.log_param("num_classes", NUM_CLASSES)
+    try:
+        # Log standardized parameters
+        params = {
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "num_epochs": args.epochs,
+            "optimizer": args.optimizer,
+            "loss_function": LOSS_FUNCTION,
+            "num_conv_blocks": NUM_CONV_BLOCKS,
+            "conv_filters_initial": CONV_FILTERS_INITIAL,
+            "dense_units": DENSE_UNITS,
+            "dropout_rate": DROPOUT_RATE,
+            "random_seed": RANDOM_SEED,
+            "framework": FRAMEWORK,
+        }
+        mlflow_cfg.log_params(params)
 
-        # Define callbacks for early stopping and model checkpointing
+        # Setup callbacks
         early_stopping = EarlyStopping(
             monitor="val_loss", patience=5, restore_best_weights=True
         )
         model_checkpoint = ModelCheckpoint(
-            f"{result_dir}/best_model.keras", monitor="val_loss", save_best_only=True
+            f"{result_dir}/best_model.keras",
+            monitor="val_loss",
+            save_best_only=True,
         )
 
-        # Train the model
+        # Train
         print("Training model...\n")
         hist = model.fit(
             x_train,
@@ -216,43 +179,61 @@ def main():
             verbose=1,
         )
 
-        # Load best model weights
         model.load_weights(f"{result_dir}/best_model.keras")
 
-        # Log training history to MLflow (per epoch metrics)
+        # Log per-epoch metrics
         print("Logging training history to MLflow...")
-        for metric_name, metric_values in hist.history.items():
-            for epoch, value in enumerate(metric_values):
-                mlflow.log_metric(metric_name, float(value), step=epoch)
+        for epoch in range(len(hist.history["loss"])):
+            mlflow_cfg.log_epoch_metrics(
+                epoch=epoch,
+                train_loss=hist.history["loss"][epoch],
+                train_accuracy=hist.history["accuracy"][epoch],
+                val_loss=hist.history["val_loss"][epoch],
+                val_accuracy=hist.history["val_accuracy"][epoch],
+            )
 
-        # Evaluate the model on test set
+        # Evaluate
         print("Evaluating model on test set...")
-        metrics = model.evaluate(x_test, y_test, return_dict=True, verbose=0)
-        loss = float(metrics["loss"])
-        accuracy = float(metrics["accuracy"])
-        recall = float(metrics["recall"])
-        precision = float(metrics["precision"])
+        y_pred = model.predict(x_test, verbose=0)
+        y_true = np.argmax(y_test, axis=1)
+        y_pred_class = np.argmax(y_pred, axis=1)
 
-        # Log final test metrics to MLflow
-        mlflow.log_metrics(
-            {
-                "test_loss": loss,
-                "test_accuracy": accuracy,
-                "test_recall": recall,
-                "test_precision": precision,
-            }
+        eval_results = model.evaluate(x_test, y_test, return_dict=True, verbose=0)
+        test_loss = float(eval_results["loss"])
+        test_accuracy = float(eval_results["accuracy"])
+
+        test_precision, test_recall, test_f1 = calculate_metrics(
+            y_true, y_pred_class
         )
 
         print("\nTest Results:")
-        print(f"  Loss: {loss:.4f}")
-        print(f"  Accuracy: {accuracy:.4f}")
-        print(f"  Recall: {recall:.4f}")
-        print(f"  Precision: {precision:.4f}\n")
+        print(f"  Loss: {test_loss:.4f}")
+        print(f"  Accuracy: {test_accuracy:.4f}")
+        print(f"  Precision: {test_precision:.4f}")
+        print(f"  Recall: {test_recall:.4f}")
+        print(f"  F1-Score: {test_f1:.4f}\n")
 
-        # Generate and save training curves plot
+        # Measure inference time
+        print("Measuring inference time...")
+        inference_time_ms = measure_inference_time(model, input_size, num_iterations=100)
+        print(
+            f"Average inference time: {inference_time_ms:.4f} ms "
+            f"(over 100 predictions)\n"
+        )
+
+        # Log final metrics with training time
+        mlflow_cfg.log_final_metrics(
+            test_loss=test_loss,
+            test_accuracy=test_accuracy,
+            test_precision=test_precision,
+            test_recall=test_recall,
+            test_f1=test_f1,
+            inference_time_ms_per_batch=inference_time_ms,
+        )
+
+        # Save training curves
         plt.figure(figsize=(14, 5))
 
-        # Loss plot
         plt.subplot(1, 2, 1)
         plt.plot(hist.history["loss"], label="Training Loss", linewidth=2)
         plt.plot(hist.history["val_loss"], label="Validation Loss", linewidth=2)
@@ -262,10 +243,11 @@ def main():
         plt.legend()
         plt.grid(True, alpha=0.3)
 
-        # Accuracy plot
         plt.subplot(1, 2, 2)
         plt.plot(hist.history["accuracy"], label="Training Accuracy", linewidth=2)
-        plt.plot(hist.history["val_accuracy"], label="Validation Accuracy", linewidth=2)
+        plt.plot(
+            hist.history["val_accuracy"], label="Validation Accuracy", linewidth=2
+        )
         plt.title("Model Accuracy Over Epochs", fontsize=12, fontweight="bold")
         plt.xlabel("Epoch")
         plt.ylabel("Accuracy")
@@ -276,15 +258,11 @@ def main():
         curves_path = f"{result_dir}/training_curves.png"
         plt.savefig(curves_path, dpi=100)
         plt.close()
-        mlflow.log_artifact(curves_path)
+        mlflow_cfg.log_artifact(curves_path)
 
-        # Generate and save confusion matrix
+        # Save confusion matrix
         print("Generating confusion matrix...")
-        y_pred = model.predict(x_test, verbose=0)
-        y_pred = np.argmax(y_pred, axis=1)
-        y_true = np.argmax(y_test, axis=1)  # Convert one-hot back to class indices
-
-        cm = confusion_matrix(y_true, y_pred)
+        cm = confusion_matrix(y_true, y_pred_class)
         disp = ConfusionMatrixDisplay(
             confusion_matrix=cm, display_labels=[i for i in range(NUM_CLASSES)]
         )
@@ -293,27 +271,16 @@ def main():
         cm_path = f"{result_dir}/confusion_matrix.png"
         plt.savefig(cm_path, dpi=100, bbox_inches="tight")
         plt.close()
-        mlflow.log_artifact(cm_path)
+        mlflow_cfg.log_artifact(cm_path)
 
-        # Measure inference time
-        print("Measuring inference time...")
-        inference_time_ms = measure_inference_time(
-            model, input_size, num_iterations=100
-        )
-        mlflow.log_metric("inference_time_ms", inference_time_ms)
-        print(
-            f"Average inference time: {inference_time_ms:.4f} ms (over 100 predictions)\n"
-        )
-
-        # Log all local artifacts to MLflow
-        mlflow.log_artifacts(result_dir, artifact_path="results")
-
-        # Log the model to MLflow
-        mlflow.keras.log_model(model, "best_model")
+        # Log artifacts
+        mlflow_cfg.log_artifact(result_dir)
 
         print(f"\nTraining complete!")
-        print(f"Results saved to: {result_dir}")
-        print(f"MLflow tracking URI: {mlflow.get_tracking_uri()}\n")
+        print(f"Results saved to: {result_dir}\n")
+
+    finally:
+        mlflow_cfg.end_run()
 
 
 if __name__ == "__main__":
