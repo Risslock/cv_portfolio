@@ -253,12 +253,10 @@ def train_cnn(
 
         # Save model to MLflow
         print("Saving model to MLflow...")
-        # Get a sample input for tracing (required for pt2 serialization format)
-        sample_batch = next(iter(test_loader))[0][:1].to(device)
         mlflow.pytorch.log_model(
             model,
             artifact_path="pytorch_cnn_model",
-            input_example=sample_batch.cpu(),
+            serialization_format="pickle",
         )
 
         print(f"MLflow Run ID: {mlflow_config.run_id}")
