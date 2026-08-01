@@ -220,3 +220,32 @@ __marimo__/
 # Claude Code and Specify
 .claude/
 .specify/
+
+# MLflow and Experiment Tracking
+mlruns/
+.mlflow/
+
+# Experiment Results and Outputs
+results/
+outputs/
+logs/
+checkpoints/
+models/
+
+# Data directories (optional, uncomment if needed)
+# data/
+# datasets/
+
+# Jupyter and Notebook Cache
+.ipython_kernel_startup/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE and Editor
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+*~
