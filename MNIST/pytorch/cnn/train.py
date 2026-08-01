@@ -238,22 +238,22 @@ def train_cnn(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train CNN model on MNIST")
     parser.add_argument("--epochs", type=int, default=60, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument(
-        "--learning-rate", type=float, default=0.001, help="Learning rate"
+        "--learning_rate", type=float, default=0.001, help="Learning rate"
     )
     parser.add_argument(
-        "--num-conv-blocks", type=int, default=2, help="Number of conv blocks"
+        "--num_conv_blocks", type=int, default=2, help="Number of conv blocks"
     )
     parser.add_argument(
-        "--conv-filters-initial",
+        "--conv_filters_initial",
         type=int,
         default=32,
         help="Initial filter count",
     )
-    parser.add_argument("--dense-units", type=int, default=128, help="Dense units")
-    parser.add_argument("--dropout-rate", type=float, default=0.5, help="Dropout rate")
-    parser.add_argument("--random-seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--dense_units", type=int, default=128, help="Dense units")
+    parser.add_argument("--dropout_rate", type=float, default=0.5, help="Dropout rate")
+    parser.add_argument("--random_seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
 
