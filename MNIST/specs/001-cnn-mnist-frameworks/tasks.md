@@ -122,13 +122,13 @@
   - Verify architecture equivalence to TensorFlow model
   - Test in tests/integration/test_pytorch_training.py
 
-- [ ] T022 [US1] Create README in tensorflow/cnn/README.md
+- [x] T022 [US1] Create README in tensorflow/cnn/README.md
   - How to train: `uv run python tensorflow/cnn/train.py --epochs 60`
   - How to view results: `mlflow ui --port 5000`
   - Explanation of architecture choices
   - Link to contracts/model-interface.md
 
-- [ ] T023 [US1] Create README in pytorch/cnn/README.md
+- [x] T023 [US1] Create README in pytorch/cnn/README.md
   - How to train: `uv run python pytorch/cnn/train.py --epochs 60`
   - How to view results: `mlflow ui --port 5000`
   - Explanation of architecture choices
@@ -447,6 +447,319 @@ Dev C: T022-T023 (READMEs)
 - Stop at any checkpoint to demo/validate
 - Use `uv run` prefix for all command execution (environment isolation)
 - Refer to contracts/ and data-model.md for specifications during implementation
+
+---
+
+## Phase 8: Convergence (Gap Closure)
+
+**Purpose**: Close gaps identified between specification/plan/tasks and current codebase implementation. All remaining work to satisfy spec requirements, user stories, and constitutional principles.
+
+**CRITICAL**: Principle IV (Jupyter Notebooks) is unfulfilled; notebooks are primary learning artifacts and constitutional requirement.
+
+### Data Loading & Infrastructure
+
+- [x] T051 Create tensorflow/cnn/data.py with MNIST data loading and preprocessing (per T007)
+  - Implement load_mnist() function
+  - Handle automatic download if needed
+  - Return normalized (train_data, train_labels), (val_data, val_labels), (test_data, test_labels)
+  - Input shape verification: (N, 28, 28, 1) for TensorFlow
+  - Normalize to [0, 1] range
+  - Test split: 50k train, 10k val, 10k test
+
+- [x] T052 Create pytorch/cnn/data.py with MNIST data loading and DataLoader creation (per T008)
+  - Implement load_mnist() function returning PyTorch DataLoaders
+  - Verify input shape: (N, 1, 28, 28) for PyTorch (NCHW format)
+  - Use torch.utils.data.DataLoader with batch_size=32
+  - Normalize to [0, 1] range
+  - Handle train/val/test splits consistently with TensorFlow
+
+### Model Implementations (User Story 1)
+
+- [x] T053 [P] Create tensorflow/cnn/models.py: MNISTCNNModel class (per T012)
+  - Inherit from keras.Sequential
+  - Constructor params: input_shape=(28,28,1), num_classes=10, num_conv_blocks=2, conv_filters_initial=32, dense_units=128, dropout_rate=0.5, seed=42
+  - Implement 2 Conv→MaxPool blocks, Flatten, Dense(128, ReLU), Dropout, Dense(10, Softmax)
+  - Set tf.random.set_seed(seed) for reproducibility
+  - Compile with Adam optimizer, categorical_crossentropy loss, accuracy metric
+  - Include complete docstring explaining architecture and hyperparameters
+  - Verify output shape: (batch_size, 10) with softmax probabilities
+
+- [x] T054 [P] Create pytorch/cnn/models.py: MNISTCNNModel class (per T013)
+  - Inherit from torch.nn.Module
+  - Constructor params: input_channels=1, num_classes=10, num_conv_blocks=2, conv_filters_initial=32, dense_units=128, dropout_rate=0.5, seed=42
+  - Implement forward() method matching architecture from contracts/model-interface.md
+  - Set torch.manual_seed(seed) for reproducibility
+  - Include train()/eval() mode support for dropout
+  - Include complete docstring with type hints and architecture explanation
+  - Verify output shape: (batch_size, 10) with logits (no softmax in model)
+
+### Training Scripts with MLflow Integration
+
+- [x] T055 Create tensorflow/cnn/train.py: Training script with MLflow logging (per T014)
+  - Parse CLI args or use defaults: epochs=60, batch_size=32, learning_rate=0.001
+  - Use utils/mlflow_config.py to setup MLflow experiment "cnn_mnist_tensorflow"
+  - Log all 11 parameters per MLflow contract: learning_rate, batch_size, num_epochs, optimizer="adam", loss_function="categorical_crossentropy", num_conv_blocks=2, conv_filters_initial=32, dense_units=128, dropout_rate=0.5, random_seed=42, framework="tensorflow"
+  - Log train/val metrics per epoch using MLflow (step=epoch)
+  - Compute test metrics (accuracy, precision, recall, F1) using utils/metrics.py
+  - Log final metrics: test_loss, test_accuracy, test_precision, test_recall, test_f1, training_time_seconds, inference_time_ms_per_batch
+  - Save model artifact to MLflow as "tensorflow_cnn_model"
+  - Achieve ≥98% test accuracy per SC-001
+
+- [x] T056 Create pytorch/cnn/train.py: Training script with MLflow logging (per T015)
+  - Parse CLI args or use defaults: epochs=60, batch_size=32, learning_rate=0.001
+  - Use utils/mlflow_config.py to setup MLflow experiment "cnn_mnist_pytorch"
+  - Log identical 11 parameters to TensorFlow for fair comparison
+  - Implement training loop with optimizer step, loss computation, backward pass
+  - Log train/val metrics per epoch (step=epoch)
+  - Compute test metrics using utils/metrics.py
+  - Log final metrics: test_loss, test_accuracy, test_precision, test_recall, test_f1, training_time_seconds, inference_time_ms_per_batch
+  - Save model artifact to MLflow as "pytorch_cnn_model"
+  - Achieve ≥98% test accuracy per SC-001
+
+### Evaluation Utilities
+
+- [x] T057 [P] Create tensorflow/cnn/evaluate.py: Evaluation utilities (per T016)
+  - Implement compute_metrics(y_true, y_pred, y_probs) → (loss, accuracy, precision, recall, f1)
+  - Implement plot_history(history_dict) → saves training_history.png
+  - Implement infer_batch(model, batch_data) → predictions with batch handling
+  - Import from utils/metrics.py for consistency
+  - Include docstrings for all public functions
+
+- [x] T058 [P] Create pytorch/cnn/evaluate.py: Evaluation utilities (per T017)
+  - Implement compute_metrics(y_true, y_pred, y_logits) → (loss, accuracy, precision, recall, f1)
+  - Implement plot_history(history_dict) → saves training_history.png
+  - Implement infer_batch(model, batch_data) → predictions with batch handling
+  - Use torch evaluation patterns (model.eval(), torch.no_grad())
+  - Include docstrings for all public functions
+
+### Testing Infrastructure
+
+- [ ] T059 Create tests/conftest.py with pytest fixtures (per T010)
+  - Provide fixture for temporary MNIST dataset
+  - Provide fixture for MLflow tracking setup/cleanup
+  - Provide fixture with seed=42 enforcement for reproducibility
+
+- [ ] T060 Create tests/test_data_loading.py: Verify data loading consistency (per T011)
+  - Test tensorflow/cnn/data.py: verify shapes, normalization, split counts
+  - Test pytorch/cnn/data.py: verify shapes, DataLoader batch sizes
+  - Test both frameworks load identical data splits (sample comparison)
+  - Target: All data tests pass
+
+### Model Unit Tests
+
+- [ ] T061 Create tests/test_tensorflow_cnn_models.py (per T018)
+  - Test model instantiation with seed=42
+  - Test forward pass: input (1, 28, 28, 1) → output (1, 10)
+  - Test softmax constraint: output sums to 1.0 ± tolerance
+  - Test model.compile() includes optimizer and loss
+  - Test accuracy on small subset ≥95%
+  - Target: All model tests pass
+
+- [ ] T062 Create tests/test_pytorch_cnn_models.py (per T019)
+  - Test model instantiation with seed=42
+  - Test forward pass: input (1, 1, 28, 28) → output (1, 10)
+  - Test model.train()/model.eval() modes
+  - Test model.parameters() access for optimizer
+  - Test accuracy on small subset ≥95%
+  - Target: All model tests pass
+
+### Integration Tests
+
+- [ ] T063 Create tests/integration/test_tensorflow_training.py (per T020)
+  - Run tensorflow/cnn/train.py for 2 epochs
+  - Verify experiment created: "cnn_mnist_tensorflow"
+  - Verify all 11 parameters logged (including random_seed=42)
+  - Verify metrics logged per epoch (4 metrics × epochs)
+  - Verify final metrics logged (7 values)
+  - Verify test_accuracy ≥ 0.98
+  - Target: Integration test passes
+
+- [ ] T064 Create tests/integration/test_pytorch_training.py (per T021)
+  - Run pytorch/cnn/train.py for 2 epochs
+  - Verify experiment created: "cnn_mnist_pytorch"
+  - Verify all 11 parameters logged (including random_seed=42)
+  - Verify metrics logged per epoch (4 metrics × epochs)
+  - Verify architecture equivalence to TensorFlow model
+  - Verify final metrics logged (7 values)
+  - Verify test_accuracy ≥ 0.98
+  - Target: Integration test passes
+
+### Documentation & Learning Guides (User Story 2 - CRITICAL)
+
+- [x] T065 [P] Create notebooks/tensorflow_cnn_guide.ipynb (per T024, Principle IV)
+  - Section 1: Setup & Imports (MLflow, TensorFlow, NumPy, matplotlib, sklearn)
+  - Section 2: Load MNIST Data (show shapes, visualize 10 sample images)
+  - Section 3: Data Preprocessing (normalization [0,1], train/val/test split)
+  - Section 4: Model Definition (explain Conv, MaxPool, Dense, Dropout layers; show summary)
+  - Section 5: Training Setup (MLflow experiment, parameter logging explanation)
+  - Section 6: Training Loop (execute with epoch-level metric logging; 5-10 epochs for quick execution)
+  - Section 7: Evaluation (compute test metrics, plot training_history, show confusion matrix)
+  - Section 8: Save Model (log artifact to MLflow, retrieve run ID for reference)
+  - Add 1-2 markdown cells per section explaining concepts
+  - Total ≥8 markdown cells minimum (per SC-004)
+  - Execution time <2 minutes on CPU (per SC-003)
+  - Per Principle IV: must serve as learning guide with clear explanations
+
+- [x] T066 [P] Create notebooks/pytorch_cnn_guide.ipynb (per T025, Principle IV)
+  - Identical conceptual structure to TensorFlow notebook (8 sections)
+  - Same markdown explanations and visualizations (parallel narrative)
+  - PyTorch-specific implementations: DataLoader, forward pass, training loop with optimizer
+  - Add 1-2 markdown cells per section explaining concepts
+  - Total ≥8 markdown cells minimum (per SC-004)
+  - Execution time <2 minutes on CPU (per SC-003)
+  - Demonstrate framework differences clearly while maintaining equivalent pipeline
+  - Per Principle IV: must serve as learning guide with clear explanations
+
+- [x] T067 Create notebooks/README.md (per T026)
+  - Explain how to run notebooks: `uv run jupyter notebook notebooks/`
+  - Describe notebook structure and learning objectives
+  - Explain why comparing both frameworks is valuable
+  - Link to tensorflow/cnn/README.md and pytorch/cnn/README.md for framework-specific info
+  - Point to contracts/model-interface.md for architectural details
+
+- [ ] T068 Create tests/integration/test_notebooks.py (per T027)
+  - Execute both notebooks programmatically using nbconvert or nbformat
+  - Verify: no errors during execution
+  - Verify: execution time <120 seconds each
+  - Verify: at least 8 markdown cells per notebook
+  - Target: Both notebooks execute cleanly
+
+### Architecture Documentation (User Story 3)
+
+- [ ] T069 Add comprehensive docstrings to tensorflow/cnn/models.py (per T028)
+  - Class docstring: CNN architecture summary, why 2 blocks + 2 dense layers
+  - Explain conv filter progression (32 → 64) and why effective for MNIST
+  - Document all hyperparameters and their roles
+  - Method docstrings: __init__, build (if Functional), forward pass behavior
+  - Reference contracts/model-interface.md for validation details
+
+- [ ] T070 Add comprehensive docstrings to pytorch/cnn/models.py (per T029)
+  - Class docstring: CNN architecture summary, equivalence to TensorFlow
+  - Explain Conv2d → MaxPool progression and design rationale
+  - Document all hyperparameters and their roles
+  - Method docstrings: __init__, forward, train/eval modes
+  - Include type hints on public methods
+  - Per Principle V: complete docstrings per spec
+
+- [ ] T071 [P] Add docstrings to tensorflow/cnn/evaluate.py (per T030)
+  - Docstrings for all public functions: compute_metrics(), plot_history(), infer_batch()
+  - Explain metric definitions (accuracy, precision, recall, F1)
+  - Include parameter and return types
+  - Per Principle V: complete documentation
+
+- [ ] T072 [P] Add docstrings to pytorch/cnn/evaluate.py (per T031)
+  - Docstrings for all public functions: compute_metrics(), plot_history(), infer_batch()
+  - Explain metric definitions and PyTorch-specific patterns
+  - Include parameter and return types
+  - Per Principle V: complete documentation
+
+- [ ] T073 Run full production training for accuracy validation (per T032)
+  - Train TensorFlow CNN for full 60 epochs, document final accuracy in tensorflow/cnn/README.md
+  - Train PyTorch CNN for full 60 epochs, document final accuracy in pytorch/cnn/README.md
+  - Include test_loss, test_precision, test_recall, test_f1 in READMEs
+  - Verify both achieve ≥98% accuracy (per SC-001)
+  - Verify MLflow experiments display comparable results
+
+- [ ] T074 Update main project README.md (per T033, Principle VI)
+  - Add section: "CNN Models"
+  - Explain CNN architecture choices: why 2 conv blocks, why MaxPooling, why effective for MNIST
+  - Link to tensorflow/cnn/README.md and pytorch/cnn/README.md
+  - Link to quickstart.md for validation guide
+  - Explain framework comparison value
+  - Per Principle VI: comprehensive documentation
+
+### Reproducibility & Serialization (User Story 4)
+
+- [ ] T075 [P] Implement seed=42 enforcement in tensorflow/cnn/models.py (per T034)
+  - Call tf.random.set_seed(seed) in __init__ with provided seed parameter
+  - Document seed requirement in docstring: "seed=42 required for reproducibility"
+  - Add test to verify weight initialization is deterministic across runs
+
+- [ ] T076 [P] Implement seed=42 enforcement in pytorch/cnn/models.py (per T035)
+  - Call torch.manual_seed(seed) in __init__ with provided seed parameter
+  - Document seed requirement in docstring: "seed=42 required for reproducibility"
+  - Add test to verify weight initialization is deterministic across runs
+
+- [ ] T077 Create tests/test_model_serialization.py (per T036)
+  - Test TensorFlow model save/load via MLflow: train → save → load → predict
+  - Test PyTorch model save/load via MLflow: train → save → load → predict
+  - Verify loaded models produce identical predictions on test set (within floating-point tolerance)
+  - Verify accuracy preserved after load
+
+- [ ] T078 Create tests/test_reproducibility.py (per T037)
+  - Train both models twice with seed=42, identical hyperparameters
+  - Verify weight initialization is identical between runs
+  - Verify test accuracy is identical between runs
+  - Test both TensorFlow and PyTorch
+
+- [ ] T079 Update tensorflow/cnn/README.md with reproducibility guide (per T038)
+  - How to load trained model: example code with mlflow.tensorflow.load_model()
+  - How to use model for inference: example batch prediction code
+  - Seed requirement: "seed=42 MUST be used for reproducibility"
+  - Link to MLflow tracking for parameter verification
+
+- [ ] T080 Update pytorch/cnn/README.md with reproducibility guide (per T039)
+  - How to load trained model: example code with mlflow.pytorch.load_model()
+  - How to use model for inference: example batch prediction code with torch.no_grad()
+  - Seed requirement: "seed=42 MUST be used for reproducibility"
+  - Link to MLflow tracking for parameter verification
+
+### Code Quality & Validation (Phase 7)
+
+- [ ] T081 [P] Linting: tensorflow/cnn/ with flake8 (per T040)
+  - Command: `uv run flake8 tensorflow/cnn/ --max-line-length=100`
+  - Target: Zero warnings
+  - Verify all files: __init__.py, models.py, data.py, train.py, evaluate.py
+
+- [ ] T082 [P] Linting: pytorch/cnn/ with flake8 (per T041)
+  - Command: `uv run flake8 pytorch/cnn/ --max-line-length=100`
+  - Target: Zero warnings
+  - Verify all files: __init__.py, models.py, data.py, train.py, evaluate.py
+
+- [ ] T083 [P] Linting: utils/ with flake8 (per T042)
+  - Command: `uv run flake8 utils/ --max-line-length=100`
+  - Target: Zero warnings
+
+- [ ] T084 [P] Pylint checks: tensorflow/cnn/ (per T043)
+  - Command: `uv run pylint tensorflow/cnn/ --disable=C0111 --disable=R0913`
+  - Target: Zero warnings
+
+- [ ] T085 [P] Pylint checks: pytorch/cnn/ (per T044)
+  - Command: `uv run pylint pytorch/cnn/ --disable=C0111 --disable=R0913`
+  - Target: Zero warnings
+
+- [ ] T086 [P] Pylint checks: utils/ (per T045)
+  - Command: `uv run pylint utils/ --disable=C0111 --disable=R0913`
+  - Target: Zero warnings
+
+- [ ] T087 Run all unit tests (per T046)
+  - Command: `uv run pytest tests/test_*.py -v`
+  - Target: All pass, coverage ≥70%
+
+- [ ] T088 Run all integration tests (per T047)
+  - Command: `uv run pytest tests/integration/ -v`
+  - Target: All pass
+
+- [ ] T089 Execute quickstart.md validation guide (per T048)
+  - Run through all validation steps from quickstart.md
+  - Verify: Code quality (linting zero warnings), Model interfaces (contracts satisfied), Unit tests (all pass), Training + MLflow (experiment created, parameters logged), Framework comparison (both models tracked), Notebooks (both execute <2 min), Reproducibility (seed=42 enforced), Documentation (READMEs complete)
+  - Document results
+
+- [ ] T090 Create/update IMPLEMENTATION_NOTES.md (per T049)
+  - Summary of CNN implementation
+  - Architecture decisions: why 2 conv blocks, filter progression, layer choices
+  - Rationale for hyperparameters
+  - Known limitations or future improvements
+  - Instructions for extending (adding more architectures, adjusting hyperparameters, etc.)
+
+- [ ] T091 Final sanity check: Complete training pipeline (per T050)
+  - Train TensorFlow CNN for 60 epochs, verify ≥98% accuracy
+  - Train PyTorch CNN for 60 epochs, verify ≥98% accuracy
+  - Verify both MLflow experiments created with all 11 parameters logged
+  - Verify metrics comparable across frameworks (same names, same value ranges)
+  - Execute both notebooks end-to-end, verify <2 min execution each
+  - Total training time <10 minutes (both models)
+  - **SUCCESS CRITERION**: Both models ≥98%, both notebooks <2 min, MLflow experiments comparable
 
 ---
 
