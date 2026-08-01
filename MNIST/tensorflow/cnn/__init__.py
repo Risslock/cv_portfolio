@@ -1,5 +1,5 @@
 """TensorFlow Convolutional Neural Network implementation for MNIST."""
 
-from .model import CNNModel
+from .models import MNISTCNNModel
 
-__all__ = ["CNNModel"]
+__all__ = ["MNISTCNNModel"]
