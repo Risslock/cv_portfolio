@@ -44,6 +44,7 @@ venv/
 # MLflow
 mlruns/
 .mlflow/
+mlflow.db
 
 # Temporary files
 *.tmp
