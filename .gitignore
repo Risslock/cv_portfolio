@@ -232,9 +232,9 @@ logs/
 checkpoints/
 models/
 
-# Data directories (optional, uncomment if needed)
-# data/
-# datasets/
+# Data directories
+data/
+datasets/
 
 # Jupyter and Notebook Cache
 .ipython_kernel_startup/

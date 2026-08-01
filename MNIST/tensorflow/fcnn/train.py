@@ -61,15 +61,15 @@ def measure_inference_time(model, input_size: int, num_iterations: int = 100) ->
         float: Average inference time in milliseconds
     """
     # Create dummy input with batch size 1
-    dummy_input = np.zeros((1, input_size))
+    dummy_input = np.zeros((1, input_size), dtype=np.float32)
 
     # Warm-up pass to exclude compilation overhead
-    _ = model.predict(dummy_input, verbose=0)
+    _ = model(dummy_input, training=False)
 
     # Measure inference time over multiple iterations
     start_time = time.time()
     for _ in range(num_iterations):
-        _ = model.predict(dummy_input, verbose=0)
+        _ = model(dummy_input, training=False)
     end_time = time.time()
 
     # Calculate average time in milliseconds
@@ -159,7 +159,9 @@ def main():
         optimizer = SGD(learning_rate=args.learning_rate)
         print(f"Using SGD optimizer with learning rate: {args.learning_rate}")
     else:
-        raise ValueError(f"Unknown optimizer: {args.optimizer}. Choose 'adam' or 'sgd'.")
+        raise ValueError(
+            f"Unknown optimizer: {args.optimizer}. Choose 'adam' or 'sgd'."
+        )
 
     model.compile(
         optimizer=optimizer,
@@ -293,11 +295,15 @@ def main():
         plt.close()
         mlflow.log_artifact(cm_path)
 
-        # Measure inference time on single example
+        # Measure inference time
         print("Measuring inference time...")
-        inference_time_ms = measure_inference_time(model, input_size, num_iterations=100)
+        inference_time_ms = measure_inference_time(
+            model, input_size, num_iterations=100
+        )
         mlflow.log_metric("inference_time_ms", inference_time_ms)
-        print(f"Average inference time: {inference_time_ms:.4f} ms (over 100 predictions)\n")
+        print(
+            f"Average inference time: {inference_time_ms:.4f} ms (over 100 predictions)\n"
+        )
 
         # Log all local artifacts to MLflow
         mlflow.log_artifacts(result_dir, artifact_path="results")
