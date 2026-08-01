@@ -18,9 +18,9 @@ from tensorflow.keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from tensorflow.cnn.data import load_mnist
-from tensorflow.cnn.evaluate import compute_metrics
-from tensorflow.cnn.models import MNISTCNNModel
+from .data import load_mnist
+from .evaluate import compute_metrics
+from .models import MNISTCNNModel
 from utils.mlflow_config import MLflowConfig
 
 

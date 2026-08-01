@@ -19,9 +19,9 @@ import torch.nn as nn
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from pytorch.cnn.data import load_mnist
-from pytorch.cnn.evaluate import compute_metrics
-from pytorch.cnn.models import MNISTCNNModel
+from .data import load_mnist
+from .evaluate import compute_metrics
+from .models import MNISTCNNModel
 from utils.mlflow_config import MLflowConfig
 
 
