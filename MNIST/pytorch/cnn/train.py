@@ -5,6 +5,7 @@ parameters, and model artifacts. Enables reproducible, comparable experiments.
 """
 
 import argparse
+import importlib.util
 import os
 import sys
 import time
@@ -15,13 +16,34 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Add project root to path for imports
+# Add project root to path
 project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-from .data import load_mnist
-from .evaluate import compute_metrics
-from .models import MNISTCNNModel
+# Import local modules (avoid namespace collision with installed pytorch)
+# Load data module
+data_path = Path(__file__).parent / "data.py"
+spec = importlib.util.spec_from_file_location("data", data_path)
+data_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(data_module)
+load_mnist = data_module.load_mnist
+
+# Load models module
+models_path = Path(__file__).parent / "models.py"
+spec = importlib.util.spec_from_file_location("models", models_path)
+models_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(models_module)
+MNISTCNNModel = models_module.MNISTCNNModel
+
+# Load evaluate module
+evaluate_path = Path(__file__).parent / "evaluate.py"
+spec = importlib.util.spec_from_file_location("evaluate", evaluate_path)
+evaluate_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(evaluate_module)
+compute_metrics = evaluate_module.compute_metrics
+
+# Load utils
 from utils.mlflow_config import MLflowConfig
 
 
