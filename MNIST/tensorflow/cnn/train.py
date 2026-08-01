@@ -5,13 +5,14 @@ parameters, and model artifacts. Enables reproducible, comparable experiments.
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
 import mlflow
 import numpy as np
-from tensorflow.keras.callbacks import Callback
+from tensorflow.keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -44,6 +45,8 @@ def train_cnn(
     dense_units: int = 128,
     dropout_rate: float = 0.5,
     random_seed: int = 42,
+    checkpoint_dir: str = "./results/tensorflow_cnn",
+    patience: int = 5,
 ):
     """
     Train CNN model on MNIST with MLflow experiment tracking.
@@ -57,7 +60,12 @@ def train_cnn(
         dense_units: Hidden units in dense layer. Default: 128.
         dropout_rate: Dropout probability. Default: 0.5.
         random_seed: Random seed for reproducibility. Default: 42.
+        checkpoint_dir: Directory to save model checkpoints. Default: "./results/tensorflow_cnn"
+        patience: Early stopping patience (epochs without improvement). Default: 5.
     """
+    # Create checkpoint directory
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
     # Initialize MLflow experiment
     mlflow_config = MLflowConfig(experiment_name="cnn_mnist_tensorflow")
     mlflow_config.start_run()
@@ -102,8 +110,22 @@ def train_cnn(
         )
         model.summary()
 
+        # Setup callbacks for early stopping and checkpointing
+        early_stopping = EarlyStopping(
+            monitor="val_loss",
+            patience=patience,
+            restore_best_weights=True,
+            verbose=1,
+        )
+        model_checkpoint = ModelCheckpoint(
+            f"{checkpoint_dir}/best_model.keras",
+            monitor="val_loss",
+            save_best_only=True,
+            verbose=1,
+        )
+
         # Train model
-        print(f"Training for {epochs} epochs...")
+        print(f"Training for {epochs} epochs (with early stopping, patience={patience})...")
         start_time = time.time()
 
         history = model.fit(
@@ -113,7 +135,7 @@ def train_cnn(
             epochs=epochs,
             batch_size=batch_size,
             verbose=1,
-            callbacks=[MLflowLoggingCallback()],
+            callbacks=[MLflowLoggingCallback(), early_stopping, model_checkpoint],
         )
 
         training_time = time.time() - start_time
@@ -194,4 +216,5 @@ if __name__ == "__main__":
         dense_units=args.dense_units,
         dropout_rate=args.dropout_rate,
         random_seed=args.random_seed,
+        patience=5,
     )

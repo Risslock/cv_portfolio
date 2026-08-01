@@ -5,6 +5,7 @@ parameters, and model artifacts. Enables reproducible, comparable experiments.
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -83,6 +84,8 @@ def train_cnn(
     dense_units: int = 128,
     dropout_rate: float = 0.5,
     random_seed: int = 42,
+    checkpoint_dir: str = "./results/pytorch_cnn",
+    patience: int = 5,
 ):
     """
     Train CNN model on MNIST with MLflow experiment tracking.
@@ -96,7 +99,12 @@ def train_cnn(
         dense_units: Hidden units in dense layer. Default: 128.
         dropout_rate: Dropout probability. Default: 0.5.
         random_seed: Random seed for reproducibility. Default: 42.
+        checkpoint_dir: Directory to save model checkpoints. Default: "./results/pytorch_cnn"
+        patience: Early stopping patience (epochs without improvement). Default: 5.
     """
+    # Create checkpoint directory
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
     # Set device (CPU or GPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -150,9 +158,12 @@ def train_cnn(
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         criterion = nn.CrossEntropyLoss()
 
-        # Train model
-        print(f"Training for {epochs} epochs...")
+        # Train model with early stopping
+        print(f"Training for {epochs} epochs (with early stopping, patience={patience})...")
         start_time = time.time()
+
+        best_val_loss = float("inf")
+        epochs_without_improvement = 0
 
         for epoch in range(epochs):
             train_loss, train_acc = train_one_epoch(
@@ -169,12 +180,27 @@ def train_cnn(
                 val_accuracy=val_acc,
             )
 
-            if (epoch + 1) % 10 == 0:
-                print(
-                    f"Epoch {epoch + 1}/{epochs}: "
-                    f"train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
-                    f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}"
-                )
+            print(
+                f"Epoch {epoch + 1}/{epochs}: "
+                f"train_loss={train_loss:.4f}, train_acc={train_acc:.4f}, "
+                f"val_loss={val_loss:.4f}, val_acc={val_acc:.4f}"
+            )
+
+            # Early stopping and checkpointing
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_without_improvement = 0
+                # Save best model
+                torch.save(model.state_dict(), f"{checkpoint_dir}/best_model.pth")
+                print(f"  ✓ Best model saved (val_loss: {val_loss:.4f})")
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= patience:
+                    print(
+                        f"Early stopping triggered after {epoch + 1} epochs "
+                        f"({patience} epochs without improvement)"
+                    )
+                    break
 
         training_time = time.time() - start_time
         print(f"Training completed in {training_time:.2f} seconds")
@@ -266,4 +292,5 @@ if __name__ == "__main__":
         dense_units=args.dense_units,
         dropout_rate=args.dropout_rate,
         random_seed=args.random_seed,
+        patience=5,
     )
