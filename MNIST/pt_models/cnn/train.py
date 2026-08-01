@@ -15,15 +15,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# Add project root to path for utils imports
+# Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# Import local modules from current package (now that pt_models doesn't shadow pytorch)
-from .data import load_mnist
-from .models import MNISTCNNModel
-from .evaluate import compute_metrics
+# Import local modules using absolute imports (now that pt_models doesn't shadow pytorch)
+from pt_models.cnn.data import load_mnist
+from pt_models.cnn.models import MNISTCNNModel
+from pt_models.cnn.evaluate import compute_metrics
 from utils.mlflow_config import MLflowConfig
 
 
