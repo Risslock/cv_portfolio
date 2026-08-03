@@ -224,6 +224,7 @@ __marimo__/
 # MLflow and Experiment Tracking
 mlruns/
 .mlflow/
+mlflow.db
 
 # Experiment Results and Outputs
 results/
