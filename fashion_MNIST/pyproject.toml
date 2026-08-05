@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fashion-mnist"
+version = "0.1.0"
+description = "CNN image classification on Fashion MNIST with GPU-accelerated augmentation and MLflow tracking"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+authors = [
+    {name = "Juan Esteban Betancur", email = "juaneshwa963@gmail.com"}
+]
+keywords = ["fashion-mnist", "cnn", "tensorflow", "keras", "mlflow"]
+
+dependencies = [
+    # Native Windows has no GPU support for tensorflow>=2.11 regardless of extras
+    # (see CLAUDE.md GPU Caveat), so it just gets the plain CPU wheel. Inside the
+    # Linux devcontainer, `and-cuda` pulls CUDA/cuDNN as pip wheels so the GPU
+    # passed through via `docker run --gpus=all` is actually usable.
+    "tensorflow>=2.20.0 ; sys_platform != 'linux'",
+    "tensorflow[and-cuda]>=2.20.0 ; sys_platform == 'linux'",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.5.0",
+    "matplotlib>=3.9.0",
+    "mlflow>=2.16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.29.0",
+    "ruff>=0.6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fashion_mnist"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fashion_mnist"]
