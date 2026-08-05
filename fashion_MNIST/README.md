@@ -33,11 +33,15 @@ Implement and train a CNN to classify 10 categories of clothing (28x28 grayscale
 - **MLflow** — experiment tracking, parameter/metric logging, model artifacts (local SQLite backend)
 - **matplotlib** — training curves and confusion matrix visualization
 - **uv** — dependency and environment management
+- **Docker / Dev Containers** — GPU-enabled training environment for Windows (see [GPU Training via Docker](#gpu-training-via-docker-windows))
 
 ## Project Structure
 
 ```
 fashion_MNIST/
+├── .devcontainer/
+│   ├── Dockerfile             # GPU-enabled image: deps + CUDA libs baked in at build time
+│   └── devcontainer.json      # VS Code Dev Container config (--gpus=all, port 5000 forwarded)
 ├── src/
 │   └── fashion_mnist/
 │       ├── __init__.py
@@ -95,14 +99,18 @@ uv run python -m fashion_mnist.train \
   --rotation 0.1 \
   --brightness 0.001 \
   --zoom 0.1 \
-  --translation 0.1
+  --translation 0.1 \
+  --run-name baseline
 ```
+
+`--run-name` is optional — MLflow auto-generates a human-readable name (e.g. `capable-shrike-728`) if omitted.
 
 Each run:
 - Trains with `EarlyStopping`, `ReduceLROnPlateau`, and `ModelCheckpoint` (best validation loss)
 - Logs hyperparameters, per-epoch metrics, and final test metrics to MLflow
-- Evaluates on the held-out test set with scikit-learn (precision/recall/F1, confusion matrix) and logs the confusion matrix plot as an MLflow artifact
-- Saves the best model to `results/`
+- Evaluates on the held-out test set with scikit-learn (precision/recall/F1, confusion matrix)
+- Saves everything — the model (`.keras`), confusion matrix plot, and classification report — to its own `results/<run-name>-<run-id>/` directory, and logs the same files as MLflow artifacts, so every run's outputs are recoverable and traceable back to its MLflow entry instead of overwriting the previous run
+- Logs the model with an inferred **signature** and a small **input example**, so it's ready for `mlflow.pyfunc.load_model()`-based inference without guessing input shape/dtype
 
 ### Viewing Experiments
 
@@ -112,11 +120,15 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 
 Then open http://localhost:5000 to compare runs, training curves, and confusion matrices.
 
+> Native Windows and the Docker container log to separate MLflow stores (`mlflow.db` vs `mlflow-native.db`) — see [GPU Training via Docker](#gpu-training-via-docker-windows) for why.
+
 ### Standalone Evaluation
 
 ```bash
-uv run python -m fashion_mnist.evaluate --model-path results/best_model.keras
+uv run python -m fashion_mnist.evaluate --model-path results/<run-name>-<run-id>/best_model.keras
 ```
+
+Artifacts land next to the model by default (same run directory) unless `--output-dir` is given explicitly.
 
 ### Exploring the Notebook
 
@@ -124,9 +136,58 @@ uv run python -m fashion_mnist.evaluate --model-path results/best_model.keras
 uv run jupyter notebook notebooks/fashion_mnist.ipynb
 ```
 
+## GPU Training via Docker (Windows)
+
+TensorFlow ≥2.11 has no native GPU support on Windows — it silently falls back to CPU even with CUDA/cuDNN installed (see [GPU Notes](#gpu-notes) below). The fix used here: run training inside a **Dev Container** with the NVIDIA GPU passed through via Docker Desktop's WSL2 backend. Verified working end-to-end on this project's own hardware (RTX 2060 SUPER) — TensorFlow loads cuDNN, XLA compiles for the CUDA platform, and training is markedly faster than the CPU path.
+
+### Prerequisites
+
+1. **Docker Desktop**, using the WSL2 backend (default on modern installs)
+2. An **NVIDIA GPU driver** on the Windows host that supports GPU passthrough to WSL2 (the regular Game Ready / Studio driver is enough — do *not* install a separate Linux driver inside WSL2)
+3. Verify passthrough works before going further:
+   ```bash
+   docker run --rm --gpus=all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+   ```
+   If this prints your GPU, you're set. If not, fix Docker Desktop/driver setup first — nothing below will work until this does.
+4. (For the interactive workflow) VS Code with the **Dev Containers** extension
+
+### How it's wired up
+
+- `.devcontainer/Dockerfile` builds a `python:3.12-slim` image, installs `uv`, and runs `uv sync` **at build time** — so TensorFlow, MLflow, scikit-learn, etc. are baked into the image, not reinstalled on every container start.
+- `pyproject.toml` conditions the TensorFlow dependency on platform: native Windows gets plain `tensorflow` (CPU only, since GPU isn't available there anyway); the Linux container gets `tensorflow[and-cuda]`, which pulls CUDA/cuDNN as pip wheels — no CUDA toolkit needs to be installed in the image itself.
+- **Gotcha found while building this**: `tensorflow[and-cuda]`'s bundled CUDA/cuDNN libraries aren't discovered automatically when TensorFlow lives in a `uv`-managed venv (its rpath-based lookup assumes a plain pip/venv layout). The fix — registering the pip-installed library directories with `ldconfig` — is baked into the Dockerfile as a build step, so it's permanent and doesn't need to be redone per container.
+- The venv lives at `/opt/venv` **outside** the bind-mounted project folder, so it never collides with a native-Windows `.venv` in the same directory.
+- The project folder is bind-mounted at `/workspace`, so `results/`, `data/`, and `mlflow.db` written during a container training run land directly on the host filesystem — `mlflow ui` and `uv run python -m fashion_mnist.evaluate` on native Windows see them immediately, no copying needed.
+
+### Usage: VS Code Dev Container (interactive)
+
+1. Open the `fashion_MNIST/` folder in VS Code
+2. Command Palette → **Dev Containers: Reopen in Container**
+3. Once it's up, use the integrated terminal exactly like the native workflow:
+   ```bash
+   uv run python -m fashion_mnist.train --epochs 100 --n-conv 4 --n-dense 2 --global-pooling-type flatten
+   ```
+4. Port 5000 is forwarded automatically, so `uv run mlflow ui --backend-store-uri sqlite:///mlflow.db` is reachable from the host browser.
+5. Rebuild the container (**Dev Containers: Rebuild Container**) whenever `pyproject.toml` or `uv.lock` changes.
+
+> **Why native Windows and the container use separate MLflow stores.** MLflow bakes each experiment's artifact storage location as an absolute path at creation time. If the experiment were shared, a run from one environment could silently send its model/plot artifacts to a path that only makes sense in the *other* environment (confirmed while building this: a native-Windows run against a container-created experiment tried to write to `C:\workspace\...`, outside the project entirely — and a relative path doesn't dodge this either, since MLflow resolves it to an absolute one immediately). Rather than rely on remembering not to mix environments, the container uses `mlflow.db` and native Windows automatically uses a separate `mlflow-native.db` (see `mlflow_utils.py`) — a collision is structurally impossible. Native Windows is meant for quick CPU sanity checks anyway; the container (with the GPU) is where real experiment history should accumulate. View each with `mlflow ui --backend-store-uri sqlite:///mlflow.db` or `sqlite:///mlflow-native.db` respectively.
+
+### Usage: plain Docker CLI (scripting/automation, no VS Code needed)
+
+```bash
+docker build -t fashion-mnist-gpu -f .devcontainer/Dockerfile .
+
+docker run --rm --gpus=all \
+  -v "${PWD}:/workspace" -w /workspace \
+  fashion-mnist-gpu \
+  bash -c "uv sync --extra dev && uv run python -m fashion_mnist.train --epochs 100 --n-conv 4 --n-dense 2 --global-pooling-type flatten"
+```
+
+The `uv sync` inside the container is fast (dependencies are already in the image; this just links the local `fashion_mnist` package now that the source is mounted in).
+
 ## GPU Notes
 
-TensorFlow ≥2.11 has no native GPU support on Windows — it silently falls back to CPU even with CUDA/cuDNN installed. To actually exercise the GPU-accelerated augmentation path on Windows hardware, run this project inside **WSL2** (with CUDA installed there) or a Linux/Colab environment. `configure_gpu()` and the augmentation-in-model design work unchanged either way; only the runtime environment differs.
+TensorFlow ≥2.11 has no native GPU support on Windows — it silently falls back to CPU even with CUDA/cuDNN installed. See [GPU Training via Docker](#gpu-training-via-docker-windows) above for the fix used in this project. `configure_gpu()` and the augmentation-in-model design work unchanged in the container; only the runtime environment differs.
 
 ## Data Splits
 

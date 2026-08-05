@@ -14,7 +14,12 @@ authors = [
 keywords = ["fashion-mnist", "cnn", "tensorflow", "keras", "mlflow"]
 
 dependencies = [
-    "tensorflow>=2.20.0",
+    # Native Windows has no GPU support for tensorflow>=2.11 regardless of extras
+    # (see CLAUDE.md GPU Caveat), so it just gets the plain CPU wheel. Inside the
+    # Linux devcontainer, `and-cuda` pulls CUDA/cuDNN as pip wheels so the GPU
+    # passed through via `docker run --gpus=all` is actually usable.
+    "tensorflow>=2.20.0 ; sys_platform != 'linux'",
+    "tensorflow[and-cuda]>=2.20.0 ; sys_platform == 'linux'",
     "numpy>=1.26.0",
     "scikit-learn>=1.5.0",
     "matplotlib>=3.9.0",

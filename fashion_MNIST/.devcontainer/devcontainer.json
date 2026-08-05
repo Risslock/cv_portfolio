@@ -1,0 +1,23 @@
+{
+  "name": "fashion-mnist-gpu",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "runArgs": ["--gpus=all"],
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  // Dependencies + CUDA libs are already baked into the image (see Dockerfile);
+  // this just links the local `fashion_mnist` package into that venv now that
+  // the source is bind-mounted in. Fast, and doesn't touch the heavy deps.
+  "postCreateCommand": "uv sync --extra dev",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": { "label": "MLflow UI" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}

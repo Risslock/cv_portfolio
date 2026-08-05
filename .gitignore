@@ -225,6 +225,7 @@ __marimo__/
 mlruns/
 .mlflow/
 mlflow.db
+mlflow-native.db
 
 # Experiment Results and Outputs
 results/

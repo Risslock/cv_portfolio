@@ -91,18 +91,25 @@ def evaluate_model(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained Fashion MNIST model.")
     parser.add_argument("--model-path", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Defaults to the model's own directory, so re-evaluating a run's model "
+        "lands its artifacts alongside it instead of overwriting a shared folder.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     configure_gpu()
+    output_dir = args.output_dir or args.model_path.parent
 
     model = tf.keras.models.load_model(args.model_path)
     _, _, (test_images, test_labels) = load_fashion_mnist_data()
 
-    results = evaluate_model(model, test_images, test_labels, args.output_dir)
+    results = evaluate_model(model, test_images, test_labels, output_dir)
     for key, value in results.items():
         print(f"{key}: {value}")
 
