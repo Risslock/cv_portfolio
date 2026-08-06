@@ -231,6 +231,16 @@ Each project has its own structure based on specific needs:
 - Some will have `config/` directories, others inline configuration
 - The emphasis is on clarity and reproducibility, not rigid templates
 
+### AI-Assisted Working Styles
+
+This repository is also a deliberate showcase of **different ways of working with an AI coding agent (Claude Code)**, not just different ML techniques. Each project picks its own workflow formality on purpose, matched to its scope:
+
+- **`MNIST/`** — full spec-kit workflow (`.specify/`, `specs/`, `plan`/`tasks` per feature, a versioned `constitution.md`). Heaviest formality; suited to a project built incrementally, feature by feature, over time.
+- **`fashion_MNIST/`** — lightest: a single `CLAUDE.md` alongside the README as the sole source of truth, no separate governance docs. Suited to a small, single-framework, single-architecture project.
+- **`poultry_monitoring/`** — hybrid: `constitution.md` (principles) + `plan.md` (phased roadmap) + `CLAUDE.md` (concrete conventions), but no `.specify/` tooling or per-feature specs. Fits a project planned end-to-end upfront that's too large for one file, but not built incrementally enough to need full spec-kit.
+
+None of these is "the right way" — they're presented side by side as a comparison of how much process to bring to an AI-assisted project, scaled to that project's actual size and shape. See each project's own docs for the reasoning specific to it.
+
 ### Technology Stack
 - **Frameworks:** PyTorch, TensorFlow, JAX (project-dependent)
 - **Deployment:** Local development, cloud (AWS/GCP/Azure), edge devices

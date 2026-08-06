@@ -1,0 +1,33 @@
+# Environment
+.venv/
+uv.lock.bak
+
+# Dataset cache (ChickenVerse — large, re-downloadable, CC BY-NC-SA licensed, don't redistribute via git)
+data/
+!data/.gitkeep
+
+# MLflow
+mlflow.db
+mlruns/
+
+# Per-run artifacts (weights, plots) — keep the folder, not its contents
+results/*
+!results/.gitkeep
+
+# Trained/exported model weights — too large for git, regenerate via training/export scripts
+*.pt
+*.onnx
+*.tflite
+
+# Notebooks: keep outputs out of diffs if it gets noisy (uncomment if this becomes a problem)
+# notebooks/**/*.ipynb filter=strip-notebook-output
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
