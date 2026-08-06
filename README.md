@@ -62,21 +62,27 @@ Extending digit classification to real-world objects. Classifying fashion items 
 
 ---
 
-### 3. **Object Detection: Real-Time Detection with YOLO** 🎯
-**Status:** Planned | **Difficulty:** Intermediate | **Framework:** PyTorch + Ultralytics
+### 3. **Industrial Object Detection & Segmentation: Poultry Monitoring** 🐔
+**Status:** Planned | **Difficulty:** Intermediate-Advanced | **Framework:** PyTorch + Ultralytics + Hugging Face Transformers
 
-Implementing state-of-the-art object detection using the latest YOLO version via Ultralytics. Detecting and localizing multiple objects in images and video streams.
+Detecting and segmenting individual chickens in dense, high-occlusion overhead farm footage — a real-world industrial monitoring application (flock counting, density/welfare analysis, automated inspection). Two architecture families are trained and compared head-to-head on the same data: a real-time CNN-based detector (Ultralytics **YOLO26**) and a transformer-based detector (**DETR**), across both bounding-box detection and instance segmentation.
 
 **Why this project:**
-- Real-world applications (surveillance, autonomous vehicles, robotics)
-- Understanding bounding boxes, anchor-free detection, and NMS
-- Integration with deployment frameworks
+- Real-world industrial application: precision livestock farming / automated welfare monitoring
+- Dense-scene detection (~23 chickens/image on average, up to 50+) — a genuine occlusion and small-object challenge, not a toy single-object dataset
+- Direct architectural comparison: anchor-free, NMS-free CNN detector (YOLO26) vs. set-prediction transformer (DETR) — on both bounding boxes and pixel-level masks
+- End-to-end production concerns beyond training accuracy: augmentation strategy, data loading throughput, and edge/inference optimization
 
 **Key Topics:**
-- YOLO architecture and real-time inference
-- Multi-scale feature detection
-- Data augmentation for detection tasks
-- Model optimization for edge deployment
+- Object detection & instance segmentation compared on the same dataset
+- YOLO26 (Ultralytics): DFL-free regression, NMS-free end-to-end inference, unified detection/segmentation heads
+- DETR (transformer-based set prediction, bipartite/Hungarian matching loss) as a segmentation-capable baseline
+- Domain-specific augmentation for dense small objects (occlusion-aware crops, mosaic/copy-paste, farm-camera lighting/color jitter)
+- GPU-accelerated data loading with **NVIDIA DALI**, benchmarked against a standard PyTorch loader
+- Model optimization & export for deployment: **ONNX Runtime** and **TensorFlow Lite / LiteRT** (quantization, latency/throughput benchmarking across CPU, GPU, and edge targets)
+
+**Dataset:**
+- [ChickenVerse](https://github.com/amirivojdan/ChickenVerse) (via Zenodo) — 6,539 overhead-view images, 153,764 annotated chicken instances (COCO format: boxes + SAM2-assisted segmentation masks), captured across 5 poultry facilities. Licensed CC BY-NC-SA 4.0 (non-commercial, attribution, share-alike).
 
 ---
 
@@ -339,7 +345,7 @@ Each project's README contains specific instructions for:
 ## 🔮 Planned Projects Checklist
 
 - [ ] Fashion MNIST - Multi-class classification
-- [ ] Object Detection (YOLO) - Real-time detection
+- [ ] Object Detection & Segmentation (YOLO26 vs. DETR) - Industrial poultry monitoring
 - [ ] Semantic Segmentation (Medical) - Healthcare applications
 - [ ] Semantic Segmentation (Agricultural) - Remote sensing
 - [ ] Satellite Image Segmentation (Water/Irrigation) - Geospatial analysis
