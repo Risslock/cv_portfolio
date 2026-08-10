@@ -6,7 +6,7 @@ Legend: 🔲 not started · 🟡 in progress · ✅ done · ⏭️ stretch/defer
 
 ## Phase 0 — Setup
 
-- 🔲 Download ChickenVerse (ChickenDet split) from Zenodo; verify COCO annotation loading (boxes + masks) for train/val/test splits
+- ✅ Download ChickenVerse (ChickenDet split) from Zenodo; verify COCO annotation loading (boxes + masks) for train/val/test splits
 - 🔲 Scaffold `src/poultry_monitoring/` package (see `CLAUDE.md` § Package Layout)
 - 🔲 `uv init` + `pyproject.toml` with `torch`/`torchvision` pinned to a CUDA wheel index, `ultralytics`, `transformers`, `mlflow`, dev deps (`ruff`, `pytest`)
 - 🔲 Verify `torch.cuda.is_available()` is `True` in the new local venv (see constitution Principle IX — don't repeat the `fashion_MNIST`/CPU-wheel mistake)
@@ -16,7 +16,7 @@ Legend: 🔲 not started · 🟡 in progress · ✅ done · ⏭️ stretch/defer
 
 Per constitution Principle II: this phase happens on **Google Colab** (free T4 GPU), not the local env — it's where the actual learning about these two architectures happens before anything gets productionized.
 
-- 🔲 Notebook: load + visualize ChickenDet (boxes + masks, density distribution across splits)
+- ✅ Notebook: load + visualize ChickenDet (boxes + masks, density distribution across splits) — see `notebooks/01_explore_chickenverse.ipynb` Notes section
 - 🔲 Notebook: first YOLO26 fine-tune (detection) on a subset — sanity-check the `ultralytics` API, default hyperparameters, output format
 - 🔲 Notebook: first DETR fine-tune (detection) on a subset — sanity-check the `transformers` training loop, Hungarian matching loss behavior, output format
 - 🔲 Notebook: prototype segmentation heads for both (YOLO26-seg; DETR panoptic head or Mask2Former fallback)
