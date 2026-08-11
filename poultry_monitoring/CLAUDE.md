@@ -20,9 +20,9 @@ This repo intentionally uses **different workflow formalities per project**, as 
 
 - **Framework**: PyTorch, via `ultralytics` (YOLO26) and `transformers` (DETR). No TensorFlow.
 - **Code style**: Plain functions with type hints for all first-party code; framework classes (`ultralytics.YOLO`, HF `Trainer`) used natively, unwrapped. See constitution Principle I.
-- **Workflow**: Notebook-first exploration on Colab, then productionize into `src/poultry_monitoring/` — translation is allowed to improve on the notebook, not required to mirror it. See constitution Principle II.
+- **Workflow**: Notebook-first exploration — on Colab or the local `.venv` (both GPU-capable, see § Environment below) — then productionize into `src/poultry_monitoring/`; translation is allowed to improve on the notebook, not required to mirror it. See constitution Principle II.
 - **Package layout**: task-separated (`detection/` vs. `segmentation/`), shared utilities live once at the top level. See § Package Layout below and constitution Principle III.
-- **Environment**: `uv` + `pyproject.toml`/`uv.lock`, native Windows (no Docker/WSL2 — PyTorch has native Windows CUDA support, unlike the TensorFlow situation in `../fashion_MNIST/`). `torch`/`torchvision` pinned to a CUDA wheel index — verify `torch.cuda.is_available()` is `True` after `uv sync`, don't assume it.
+- **Environment**: `uv` + `pyproject.toml`/`uv.lock`, native Windows (no Docker/WSL2 — PyTorch has native Windows CUDA support, unlike the TensorFlow situation in `../fashion_MNIST/`). `torch`/`torchvision` pinned to a CUDA wheel index — verify `torch.cuda.is_available()` is `True` after `uv sync`, don't assume it (confirmed `True` locally against an RTX 2060 SUPER). Run `uv sync --extra dev` (not plain `uv sync`) to also get `jupyter`/`ipykernel`/`torchinfo` for running notebooks locally; a kernel named `poultry_monitoring` is registered for the VS Code/Jupyter kernel picker.
 - **Gates**: `ruff` (lint + format) + `pytest` smoke tests on deterministic non-ML code only. No gate on model training/convergence. See § Gates below.
 - **Dataset license**: ChickenVerse is CC BY-NC-SA 4.0 — non-commercial, attribution, share-alike. Don't let export/deployment discussions drift into commercial framing without flagging this.
 
@@ -90,8 +90,8 @@ No CI — these are run locally, on demand, before considering a change done. If
 ## Commands
 
 ```bash
-uv sync                                                          # install deps
-uv run jupyter notebook notebooks/                                # Phase 1 exploration (prefer Colab for actual GPU work)
+uv sync --extra dev                                              # install deps incl. jupyter/torchinfo
+uv run jupyter notebook notebooks/                                # Phase 1 exploration — Colab or local GPU
 uv run python -m poultry_monitoring.detection.yolo --help          # once scaffolded (Phase 2+)
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db            # view experiment runs
 ```
@@ -100,4 +100,4 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db            # view exper
 
 ## Gitignore Reminders
 
-Make sure these stay gitignored: `data/` (cached ChickenVerse download), `mlruns/`, `mlflow.db`, `results/*` (per-run artifacts, keep `.gitkeep` only), `.venv/`, `*.onnx`, `*.tflite`, `*.pt` (trained weights — too large for git; document how to regenerate instead).
+Make sure these stay gitignored: `data/` (cached ChickenVerse download), `mlruns/`, `mlflow.db`, `results/*` (per-run artifacts, keep `.gitkeep` only), `runs/` (Ultralytics' default output dir for ad hoc `model.val()`/`model.predict()` calls that skip `project=`/`name=` — real runs already land under the gitignored `data/`), `.venv/`, `*.onnx`, `*.tflite`, `*.pt` (trained weights — too large for git; document how to regenerate instead).

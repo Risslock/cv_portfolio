@@ -14,6 +14,11 @@ mlruns/
 results/*
 !results/.gitkeep
 
+# Ultralytics' default train/val/predict output dir when `project=`/`name=` aren't passed —
+# real runs use project=DATA_DIR/"YOLO" (already under the gitignored data/), this only
+# catches ad hoc/one-off `model.val()`/`model.predict()` calls that skip that.
+runs/
+
 # Trained/exported model weights — too large for git, regenerate via training/export scripts
 *.pt
 *.onnx

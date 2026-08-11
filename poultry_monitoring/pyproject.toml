@@ -20,6 +20,8 @@ dev = [
     "ruff>=0.6",
     "pytest>=8.3",
     "jupyter>=1.0",
+    "ipykernel>=6.29",
+    "torchinfo>=1.8",
 ]
 
 # CUDA wheels on the local native-Windows env (constitution Principle IX). If this is
