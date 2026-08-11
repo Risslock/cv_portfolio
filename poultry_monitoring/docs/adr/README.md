@@ -11,3 +11,4 @@ instead of inlining the full rationale — see `docs/adr/template.md` for the fo
 | [0003](0003-native-mlflow-integration.md) | Native Ultralytics MLflow integration, not hand-rolled logging |
 | [0004](0004-no-test-time-preprocessing.md) | No deterministic preprocessing (autocontrast/CLAHE/hist-eq) at inference time — tested, made it worse |
 | [0005](0005-genetic-tuner-undersearches-from-a-fixed-start.md) | Ultralytics' genetic tuner doesn't meaningfully explore from a fixed start — move built-in augmentation search to this project's own random search |
+| [0006](0006-progressive-unfreeze-stage-config.md) | Progressive-unfreeze stages need a forced optimizer and a `close_mosaic`/`patience` sized for the stage, not inherited from a longer run |

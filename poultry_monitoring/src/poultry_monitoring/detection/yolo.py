@@ -76,10 +76,8 @@ AUGMENTATION_FOCUSED_SPACE = {
     "cutmix": (0.0, 1.0),
     "copy_paste": (0.0, 1.0),
     "close_mosaic": (0.0, 10.0),
-    # Added after the first tune/train pass (not in the original search) — per-batch
-    # input-resolution jitter, distinct from `scale`'s per-image zoom/crop range.
-    # Conservative range: ChickenDet is a fixed overhead rig, so extreme resizing is
-    # less likely to help than for a dataset with real camera-distance variety.
+    # Per-batch input-resolution jitter, distinct from `scale`'s per-image zoom/crop
+    # range. Conservative upper bound — ChickenDet is a fixed overhead rig.
     "multi_scale": (0.0, 0.3),
 }
 
@@ -161,8 +159,8 @@ def tune_hyperparameters(
     """Search YOLO26 hyperparameters (built-in + custom Albumentations, one joint pass).
 
     Runs `iterations` independent, in-process trials with Optuna's TPE sampler, each
-    `epochs` epochs on `fraction`
-    of the data, its own MLflow run in `DETECTION_EXPERIMENT`. Not Ultralytics' native
+    `epochs` epochs on `fraction` of the data, its own MLflow run in
+    `DETECTION_EXPERIMENT`. Not Ultralytics' native
     `model.tune()` — see docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md.
     See `tune_augmentation_parameters` for a sequential-search alternative, and
     docs/adr/0001-custom-augmentation-search-separate-from-tuner.md for why that one
@@ -390,7 +388,7 @@ def train(
             project=str(project),
             name=f"{model_name}-{variant}",
             exist_ok=True,
-            augmentations=_build_custom_augmentations(hyperparameters),  # documented kwarg
+            augmentations=_build_custom_augmentations(hyperparameters),
             **train_kwargs,
         )
 
@@ -429,26 +427,9 @@ def train(
 
 
 # Default progressive-unfreezing schedule: freeze less, drop lr0, each stage — standard
-# discriminative fine-tuning (ULMFiT-style gradual unfreezing). `optimizer: "AdamW"` is
-# forced because Ultralytics' `optimizer="auto"` default picks its own lr independent of
-# a configured lr0 (observed directly: the tuned lr0=0.01 got silently overridden to
-# AdamW(lr=0.002) during the size-sweep run) — auto's heuristic has no notion of "this is
-# a later refinement stage on an already-converged model," so a per-stage lr0 needs a
-# fixed optimizer to actually take effect.
-#
-# close_mosaic/patience picked per two rules-of-thumb (found after the first run of this
-# schedule used close_mosaic=10 inherited unchanged from the 300-epoch tuned config, which
-# on a 30-epoch stage disabled mosaic for the last 33% of it — visible as a sharp train-loss
-# drop + a transient val-loss/mAP50-95 dip right at the close_mosaic epoch, and likely why
-# that stage's early stopping locked in a near-that-epoch checkpoint):
-#   1. epochs >> close_mosaic — close_mosaic should be a small portion of a stage's epochs,
-#      not sized for a different (much longer) run.
-#   2. patience < close_mosaic — Ultralytics' best.pt always tracks the best-ever-observed
-#      validation fitness regardless of when training stops, so a patience shorter than
-#      close_mosaic acts as a bounded trial window: if training without mosaic is hurting
-#      validation, patience stops the run (and best.pt stays pinned at the last good,
-#      likely pre-transition checkpoint) before the rest of the close_mosaic tail is spent
-#      on a regime that isn't working.
+# discriminative fine-tuning (ULMFiT-style gradual unfreezing). Forced optimizer and the
+# close_mosaic/patience sizing are both deliberate — see
+# docs/adr/0006-progressive-unfreeze-stage-config.md.
 DEFAULT_UNFREEZE_STAGES = [
     {
         "freeze": 10,
@@ -554,16 +535,11 @@ def run_size_sweep(
 ) -> dict[str, object]:
     """Tune once on `yolo26n`, then train every size in `sizes` with those hyperparameters.
 
-    Two independent searches, both run once on `yolo26n` and then applied to every size
-    in `sizes` — per the project's tuning-scope decision: one tuning pass is much
-    cheaper than tuning per size, and hyperparameters/augmentation choices usually
-    transfer reasonably well across scales of the same architecture:
-
-    1. `tune_hyperparameters` — Optuna TPE search (lr0 + built-in augmentation
-       magnitudes).
-    2. `tune_augmentation_parameters` — this project's custom Albumentations parameters
-       (color invariance, lighting/contrast), run *under* the hyperparameters (1) found,
-       so the augmentation search reflects realistic training conditions.
+    Both searches run once on `yolo26n`, then the winning config is applied to every
+    size in `sizes` — one tuning pass, not one per size. `tune_augmentation_parameters`
+    runs *under* `tune_hyperparameters`'s result; some overlap between the two is a
+    known, open question — see docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md
+    § Consequences.
 
     Args:
         data_dir: Dataset root (contains `images/`, `annotations/`).
@@ -625,21 +601,16 @@ def predict(
     iou: float = DEFAULT_IOU_THRESHOLD,
     save_dir: Path | None = None,
 ) -> list:
-    """Run inference with a trained checkpoint on-demand, on arbitrary images.
-
-    Not part of the training/tuning pipeline above — for trying a trained checkpoint
-    (typically a `TrainOutcome.weights_path`) against new images: a single file, a
-    directory, or a glob pattern, anything `ultralytics.YOLO.predict`'s own `source`
-    accepts.
+    """Run inference with a trained checkpoint on arbitrary images.
 
     Args:
         weights_path: Path to a trained `.pt` checkpoint.
-        source: Image file, directory, or glob pattern to run inference on.
-        conf: Minimum detection confidence to keep a box. See module-level
-            `DEFAULT_CONF_THRESHOLD` for the precision/recall trade-off this controls.
+        source: Image, directory, or glob pattern — anything `YOLO.predict`'s own
+            `source` accepts.
+        conf: Minimum detection confidence to keep a box (see `DEFAULT_CONF_THRESHOLD`).
         iou: NMS IoU threshold for de-duplicating overlapping boxes.
-        save_dir: If given, save annotated prediction images (boxes drawn) here.
-            If `None`, nothing is written to disk — results are only returned in-memory.
+        save_dir: If given, save annotated prediction images here; otherwise results
+            are only returned in-memory.
 
     Returns:
         One Ultralytics `Results` object per input image.

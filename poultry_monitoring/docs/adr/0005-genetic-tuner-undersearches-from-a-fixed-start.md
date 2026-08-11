@@ -43,12 +43,12 @@ Stopped the `multi_scale` tune run (7/25 iterations, GPU processes killed direct
 `bash` termination didn't cascade to the detached Python subprocess on Windows). Not
 resuming it or trusting its partial result.
 
-Going forward, built-in Ultralytics augmentation hyperparameters that need genuine,
-range-spanning exploration should use this project's own random search
-(`tune_augmentation_parameters`, ADR 0001/0002's pattern — independent `Uniform(min, max)`
-draw per trial, no dependence on a starting population) instead of `model.tune()`'s genetic
-algorithm, which is better suited to *local refinement* around an already-reasonable
-starting point than to global, from-scratch exploration in a small iteration budget.
+`tune_hyperparameters` now runs Optuna's `TPESampler` in-process instead of
+`model.tune()` — genuine independent draws across the full given range, not local
+refinement around a fixed start. Because it's in-process (unlike `model.tune()`'s
+subprocess-per-trial execution, ADR 0001), the custom Albumentations parameters
+(`CUSTOM_AUGMENTATION_PARAM_RANGES`) are folded into the same objective function and
+searched jointly with the built-in ones, in one pass.
 
 ## Consequences
 
@@ -58,9 +58,11 @@ starting point than to global, from-scratch exploration in a small iteration bud
   lightly perturbed" for those. The actual trained models' numbers are still real and still
   competitive (see README § Results) — this only undercuts the "found via hyperparameter
   search" claim for specific parameters, not the results themselves.
-- Any future built-in-augmentation search should either (a) move to this project's own
-  random-search function, or (b) if `model.tune()` is kept, pre-seed its population with
-  several genuinely diverse random draws before letting mutation take over — a plain call
-  with a fresh model provides neither today.
-- Re-running the full search this way is a real GPU-time commitment, not a quick fix —
-  flagged in `plan.md`, not launched automatically.
+- `tune_augmentation_parameters` (sequential/coordinate search — fix hyperparameters,
+  then search augmentation under them) still exists as a genuinely different strategy,
+  not obsoleted by the joint search above. `run_size_sweep` runs both in sequence today,
+  which is now partially redundant (the custom params get searched twice); not changed
+  here — a real design decision once the joint search has real results to compare
+  against, not an automatic cleanup.
+- Re-running the joint search at real scale (not just the verification smoke test) is a
+  real GPU-time commitment — flagged in `plan.md`, not launched automatically.
