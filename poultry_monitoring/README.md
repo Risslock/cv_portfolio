@@ -1,6 +1,6 @@
 # Poultry Monitoring: Object Detection & Instance Segmentation
 
-Detecting and segmenting individual chickens in dense, overhead poultry farm imagery — a portfolio project applying modern object detection and segmentation architectures to an industrial computer vision problem.
+Detecting and segmenting individual chickens in dense, overhead poultry farm imagery — a portfolio project applying modern object detection and segmentation architectures to an industrial computer vision problem. **YOLO26 is the primary deliverable**; a DETR track exists as separate practice with transformer architectures, not a gating comparison (see `CLAUDE.md` § Project Intent).
 
 ## Dataset
 
@@ -31,21 +31,62 @@ ChickenVerse is released under **CC BY-NC-SA 4.0** (Attribution-NonCommercial-Sh
 
 ## Tech Stack
 
-- **Ultralytics YOLO26** — real-time, anchor-free/NMS-free CNN detector and segmenter
-- **DETR** (Hugging Face `transformers`) — transformer-based, set-prediction detector/segmenter, as an architectural point of comparison
-- **NVIDIA DALI** — GPU-accelerated data loading and augmentation pipeline
+- **Ultralytics YOLO26** — real-time, anchor-free/NMS-free CNN detector and segmenter; the model this project actually productionizes
+- **Albumentations** — custom domain-specific augmentation (color invariance, lighting/contrast), chosen over DALI for augmentation specifically — richer transform set, no GPU-memory contention with training
+- **NVIDIA DALI** — GPU-accelerated data *loading*, evaluated later only if profiling shows it's the actual bottleneck
+- **MLflow** — experiment tracking (local SQLite store), via Ultralytics' native integration
+- **DETR** (Hugging Face `transformers`) — transformer-based, set-prediction detector/segmenter; a secondary practice track, not gating the above
 - **ONNX Runtime** and **TensorFlow Lite / LiteRT** — model export and optimization for deployment
 - **PyTorch** as the underlying training framework
+
+## Usage
+
+```bash
+uv sync --extra dev   # installs deps incl. jupyter/torchinfo; verify torch.cuda.is_available()
+```
+
+Everything below runs through `detection/yolo.py`'s CLI (`--data-dir` points at a ChickenDet
+root containing `images/` and `annotations/`):
+
+```bash
+# Hyperparameter search on yolo26n (Ultralytics' native genetic-algorithm tuner)
+uv run python -m poultry_monitoring.detection.yolo tune --data-dir data/ChickenDet \
+    --iterations 20 --epochs 15 --fraction 0.3
+
+# Custom Albumentations parameter search (color invariance, lighting/contrast)
+uv run python -m poultry_monitoring.detection.yolo augtune --data-dir data/ChickenDet \
+    --trials 8 --epochs 15 --fraction 0.3
+
+# Fine-tune one size with fixed hyperparameters
+uv run python -m poultry_monitoring.detection.yolo train --data-dir data/ChickenDet \
+    --model-name yolo26n --variant baseline --epochs 100 --patience 15
+
+# Full pipeline: tune, then train every size in --sizes with the winning config
+uv run python -m poultry_monitoring.detection.yolo sweep --data-dir data/ChickenDet \
+    --sizes n s --train-epochs 300 --train-patience 15
+
+# Inference on your own images with a trained checkpoint
+uv run python -m poultry_monitoring.detection.yolo predict \
+    --weights data/ChickenDet/YOLO/yolo26n-baseline/weights/best.pt \
+    --source path/to/image_or_directory --conf 0.36 --save-dir predictions/
+```
+
+`train`/`sweep` log every run to MLflow (`uv run mlflow ui --backend-store-uri sqlite:///mlflow.db`)
+under the `poultry_detection` experiment — params, per-epoch metrics, and the final
+`box_map50`/`box_map50_95`/`box_precision`/`box_recall` numbers. A real run on `yolo26n`
+(full dataset, tuned hyperparameters) reached **mAP50 ≈ 0.98, mAP50-95 ≈ 0.86** by epoch 57 —
+see `docs/adr/` for the design decisions behind the tuning pipeline.
 
 ## Portfolio Scope & Objectives
 
 This project is scoped to demonstrate:
 
-1. Training and fine-tuning both a CNN-based (YOLO26) and a transformer-based (DETR) model on the same dataset, for both detection and instance segmentation
-2. Designing an augmentation strategy suited to dense, small, occluded objects
-3. Building and benchmarking a GPU-accelerated data loading pipeline (DALI vs. a standard loader)
-4. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets
+1. Fine-tuning and hyperparameter-optimizing a CNN-based detector (YOLO26) to a genuinely strong result on a dense, occluded dataset — the primary deliverable
+2. A domain-specific augmentation strategy suited to dense, small, occluded objects (Albumentations, searched alongside hyperparameters)
+3. Hands-on practice with a transformer-based detector (DETR) as a secondary track — compared fairly against YOLO26 if/when both are far enough along, not a gating requirement
+4. Building and benchmarking a GPU-accelerated data loading pipeline (DALI vs. a standard loader), if profiling shows it's warranted
+5. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets
 
 ## Status
 
-🚧 **Planned** — not yet started. See the root [repository README](../README.md) for how this project fits into the broader portfolio.
+🟡 **In progress** — environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/sweep/predict CLI; first full hyperparameter + augmentation search and size sweep underway. See [`plan.md`](plan.md) for phase-by-phase status and the root [repository README](../README.md) for how this project fits into the broader portfolio.
