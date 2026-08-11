@@ -2,7 +2,7 @@
 
 Detecting and segmenting individual chickens in dense, overhead poultry farm imagery — a portfolio project applying modern object detection and segmentation architectures to an industrial computer vision problem. **YOLO26 is the primary deliverable**; a DETR track exists as separate practice with transformer architectures, not a gating comparison (see [`CLAUDE.md`](CLAUDE.md) § Project Intent).
 
-**Status:** 🟡 In progress — `yolo26n` tuned, trained, and progressively unfrozen (val mAP50 = 0.987, mAP50-95 = 0.892), now **ahead of** ChickenVerse's own published baseline; `yolo26s` training running now. See [Status](#status) for the full picture and [`plan.md`](plan.md) for the live phase-by-phase roadmap.
+**Status:** 🟡 In progress — `yolo26n` tuned, trained, and progressively unfrozen (val mAP50 = 0.987, mAP50-95 = 0.892), now **ahead of** ChickenVerse's own published baseline; `yolo26s` trained (close on mAP50, gap remains on mAP50-95 — no unfreezing applied yet). See [Status](#status) for the full picture and [`plan.md`](plan.md) for the live phase-by-phase roadmap.
 
 ## Table of Contents
 
@@ -12,6 +12,7 @@ Detecting and segmenting individual chickens in dense, overhead poultry farm ima
 - [Architecture](#architecture)
 - [Usage](#usage)
 - [Results](#results)
+- [Key Findings](#key-findings)
 - [Portfolio Scope & Objectives](#portfolio-scope--objectives)
 - [Project Docs](#project-docs)
 - [Status](#status)
@@ -149,12 +150,21 @@ Export/benchmark CLI entry points don't exist yet — Phase 6 in [`plan.md`](pla
 |---|---|---|---|---|---|---|
 | `yolo26n` (this project) | val | 0.965 | 0.953 | **0.987** | **0.892** | Tuned hyperparameters + custom augmentation + progressive unfreezing (3 stages, `freeze` 10→5→0), full dataset. |
 | `yolo26n` (ChickenVerse published) | val | — | — | 0.987 | 0.890 | Reference baseline, same architecture/scale — **we're now ahead on both columns.** |
-| `yolo26s` (this project) | val | — | — | — | — | Training running now, same tuned config. |
-| `yolo26s` (ChickenVerse published) | val | — | — | 0.990 | 0.919 | Reference baseline. |
+| `yolo26s` (this project) | val | 0.967 | 0.951 | 0.989 | 0.904 | Tuned config, straight `train()` — **no** progressive unfreezing applied yet. |
+| `yolo26s` (ChickenVerse published) | val | — | — | 0.990 | 0.919 | Reference baseline — close on mAP50, a real gap remains on mAP50-95 (same shape `yolo26n` had *before* unfreezing). |
 
 All numbers are validation-split metrics from an explicit `model.val()` pass after training (not training-loop numbers). ChickenVerse's own benchmark table reports two separate mAP columns — only the `val_mAP50`/`val_mAP50-95` ones are comparable to the numbers above; see [`plan.md`](plan.md) Phase 2 for the full note. **The test split is intentionally not used for any comparison or tuning decision**, to avoid implicitly fitting it.
 
-This table reflects the state as of the last update — [`plan.md`](plan.md) Phase 2 is the live source of truth while the unfreezing/`yolo26s` runs are in flight.
+This table reflects the state as of the last update — [`plan.md`](plan.md) Phase 2 is the live source of truth for anything still in flight.
+
+## Key Findings
+
+Learnings worth keeping visible here, not just buried in `plan.md`'s working history:
+
+- **Test-time preprocessing doesn't help** ([ADR 0004](docs/adr/0004-no-test-time-preprocessing.md)) — autocontrast/CLAHE/histogram-equalization applied only at inference (no retraining) on a trained checkpoint were flat-to-negative: autocontrast was a wash (≤0.001 on every metric — the model already saw similarly mild autocontrast during training), while CLAHE and histogram-equalization measurably hurt (−0.013 to −0.014 mAP50-95) by creating a train/inference distribution mismatch instead of correcting one.
+- **`close_mosaic` must scale with stage length, not get inherited from a different run's tune result** — reusing `close_mosaic=10` (sized for a 300-epoch run) unchanged on 30-epoch progressive-unfreezing stages disabled mosaic for the last third of each stage, visible as a sharp train-loss drop plus a transient val-loss/mAP50-95 dip right at the transition epoch. Fixed with two rules of thumb: `epochs >> close_mosaic`, and `patience < close_mosaic` (since Ultralytics' `best.pt` always tracks the best-ever-observed fitness regardless of when training stops, a shorter patience bounds how much of a bad post-transition regime gets trained through before reverting).
+- **`AutoContrast`'s cutoff needed to vary per-application, not get tuned to one fixed value** — Albumentations' `RandomBrightnessContrast` auto-symmetrizes a tuned scalar into a fresh `±range` every call, but `AutoContrast.cutoff` doesn't have that built in; the augmentation search had converged it to a single always-identical value. Fixed with a small subclass that resamples `cutoff` from a fixed range each application instead.
+- **`copy_paste_mode` (`"flip"` vs `"mixup"`) is a wash at proxy scale** — every metric within 0.006 between the two; not a meaningful lever for this dataset as tested, despite a real theoretical scale-mismatch risk for `"mixup"` (unmatched cutout/background scale) that didn't clearly show up in the numbers either.
 
 ## Portfolio Scope & Objectives
 
@@ -180,4 +190,4 @@ This project uses a hybrid workflow — heavier than a single `CLAUDE.md`, light
 
 ## Status
 
-🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. `yolo26n` is fully trained through progressive unfreezing and now beats ChickenVerse's published baseline (see [Results](#results)); `yolo26s` training is running now, followed by a `copy_paste_mode` A/B test, a test-time-preprocessing comparison, and a `multi_scale` hyperparameter re-tune. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.
+🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. `yolo26n` is fully trained through progressive unfreezing and now beats ChickenVerse's published baseline; `yolo26s` is trained but hasn't had the same unfreezing treatment yet (see [Results](#results)). `copy_paste_mode` A/B and test-time-preprocessing comparisons are done (see [Key Findings](#key-findings)); a `multi_scale` hyperparameter re-tune is running now. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.

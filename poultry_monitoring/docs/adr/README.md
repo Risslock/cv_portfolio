@@ -9,3 +9,4 @@ instead of inlining the full rationale — see `docs/adr/template.md` for the fo
 | [0001](0001-custom-augmentation-search-separate-from-tuner.md) | Custom Albumentations search runs separately from `model.tune()` |
 | [0002](0002-random-search-for-augmentation-parameters.md) | Random search, not grid, for custom augmentation parameters |
 | [0003](0003-native-mlflow-integration.md) | Native Ultralytics MLflow integration, not hand-rolled logging |
+| [0004](0004-no-test-time-preprocessing.md) | No deterministic preprocessing (autocontrast/CLAHE/hist-eq) at inference time — tested, made it worse |
