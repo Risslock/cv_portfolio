@@ -26,6 +26,16 @@ This repo intentionally uses **different workflow formalities per project**, as 
 - **Environment**: `uv` + `pyproject.toml`/`uv.lock`, native Windows (no Docker/WSL2 — PyTorch has native Windows CUDA support, unlike the TensorFlow situation in `../fashion_MNIST/`). `torch`/`torchvision` pinned to a CUDA wheel index — verify `torch.cuda.is_available()` is `True` after `uv sync`, don't assume it (confirmed `True` locally against an RTX 2060 SUPER). Run `uv sync --extra dev` (not plain `uv sync`) to also get `jupyter`/`ipykernel`/`torchinfo` for running notebooks locally; a kernel named `poultry_monitoring` is registered for the VS Code/Jupyter kernel picker.
 - **Gates**: `ruff` (lint + format) + `pytest` smoke tests on deterministic non-ML code only. No gate on model training/convergence. See § Gates below.
 - **Dataset license**: ChickenVerse is CC BY-NC-SA 4.0 — non-commercial, attribution, share-alike. Don't let export/deployment discussions drift into commercial framing without flagging this.
+- **Working style**: nano/micro updates, not full-feature pushes in one turn — smallest coherent step, surfaced, before the next one. Track multi-step work with a todo list. Rationale-heavy explanations (why an approach was tried and rejected, not just what was decided) go in `docs/adr/`, not inlined as long comments/docstrings — see § Architecture Decision Records. When something breaks or a design assumption turns out wrong, surface it and ask before running an autonomous multi-step fix loop.
+
+## Architecture Decision Records
+
+`docs/adr/` holds non-obvious design decisions, especially ones arrived at by testing an
+assumption and finding it wrong (the reasoning, not just the conclusion, is the point —
+see `docs/adr/0001-*.md` for what "worth an ADR" looks like: a decision with a real
+rejected alternative and a concrete reason it didn't work). Template at
+`docs/adr/template.md`; index at `docs/adr/README.md`. Code should point here with a
+short comment (`# see docs/adr/0001-...md`) instead of inlining the full rationale.
 
 ## Source of Truth
 
@@ -65,9 +75,9 @@ Rule of thumb for "does this go in a task dir or a shared module": if segmentati
 
 - **Experiments — one per task, not one unified experiment**: `poultry_detection` and `poultry_segmentation`. Model family (`yolo26`/`detr`/future `sam`) is a run tag/param within each, not a separate experiment — this keeps mAP/mask-mAP metric columns directly comparable within an experiment's runs table, since detection and segmentation don't share the same metrics anyway.
 - **Tracking URI**: `sqlite:///mlflow.db` (native Windows env only — no cross-environment split needed here, unlike `../fashion_MNIST/`, since this project doesn't use a container).
-- **Run naming — hint at the model, keep MLflow's human-readable name for search**: don't fully hand-roll run names. Start the run unnamed so MLflow assigns its own readable name (e.g. `capable-shrike-728`), then rename it via `mlflow.set_tag("mlflow.runName", f"{model}_{variant}-{auto_name}")` — e.g. `yolo26n-baseline-capable-shrike-728`, `detr-augmented-jovial-otter-42`. This is what `mlflow_utils.make_run_name()` should do once written: readable and searchable by model at a glance, still globally unique and easy to reference verbally (mirrors `../fashion_MNIST/CLAUDE.md`'s `sanitize_run_name` pattern, applied to the run name itself instead of the local results directory).
-- **Params to log**: `model_family` (`yolo26`/`detr`/`sam`), `variant` (scale/backbone), `learning_rate`, `batch_size`, `num_epochs`, `image_size`, `augmentation_enabled`, `dali_enabled`, `random_seed`.
-- **Metrics**: `box_map50`, `box_map50_95` (in `poultry_detection`); `mask_map50`, `mask_map50_95` (in `poultry_segmentation`); `train_loss`, `val_loss` per epoch; `throughput_img_per_sec` (DALI benchmark runs); `latency_ms` (export benchmark runs, tag with `precision` and `export_target`).
+- **Run naming — hint at the model, `run_id` suffix for uniqueness**: `mlflow_utils.make_run_name(model_family, variant)` renames the active run to `f"{model_family}-{variant}-{run_id[:8]}"` — e.g. `yolo26-n-tuned-7e954a89`. Not MLflow's own auto-generated adjective-animal name (that was the original plan; not reliably reachable through `model.train()`'s public kwargs — see `docs/adr/0003-native-mlflow-integration.md`).
+- **Params to log**: `model_family` (`yolo26`/`detr`/`sam`), `variant` (scale/backbone) — plus everything Ultralytics' native MLflow integration already auto-logs from `trainer.args` (`lr0`, `batch`, `epochs`, `imgsz`, `seed`, ...), so don't re-log those by hand.
+- **Metrics**: `box_map50`, `box_map50_95`, `box_precision`, `box_recall` (in `poultry_detection`, via `mlflow_utils.finish_run`'s `extra_metrics` — Ultralytics' own auto-logged per-epoch metrics use different key names, e.g. `metrics/mAP50(B)`); `mask_map50`, `mask_map50_95` (in `poultry_segmentation`, not yet implemented); `throughput_img_per_sec` (DALI benchmark runs); `latency_ms` (export benchmark runs, tag with `precision` and `export_target`).
 - **Artifacts**: best model weights, sample predictions (boxes/masks overlaid), PR curves, and — for benchmark runs — the hardware/batch-size/precision table required by constitution Principle V.
 - Use snake_case for all logged param/metric names, matching repo-wide convention (`../fashion_MNIST/CLAUDE.md`, `../MNIST/`).
 
@@ -88,16 +98,24 @@ uv run pytest tests/          # smoke tests: COCO parsing, augmentation shapes, 
 
 No CI — these are run locally, on demand, before considering a change done. If this ever changes, wire a workflow to run exactly these three commands rather than inventing CI-specific steps.
 
+**Cadence**: run before shipping/committing a big-enough update, not after every nano-step — matches § Working Style above and avoids overprocessing. Exception: **never run `pytest` while a real GPU training job is active in the background** — it imports torch/touches CUDA and can starve/crash the live job (this has happened — cost ~58 epochs of a training run). `ruff check`/`ruff format --check` are pure static analysis and stay safe to run anytime, including mid-training.
+
 ## Commands
 
 ```bash
-uv sync --extra dev                                              # install deps incl. jupyter/torchinfo
-uv run jupyter notebook notebooks/                                # Phase 1 exploration — Colab or local GPU
-uv run python -m poultry_monitoring.detection.yolo --help          # once scaffolded (Phase 2+)
-uv run mlflow ui --backend-store-uri sqlite:///mlflow.db            # view experiment runs
+uv sync --extra dev                                                        # install deps incl. jupyter/torchinfo
+uv run jupyter notebook notebooks/                                          # Phase 1 exploration — Colab or local GPU
+uv run mlflow ui --backend-store-uri sqlite:///mlflow.db                     # view experiment runs
+
+# detection/yolo.py CLI — see README.md for a walked-through example of each
+uv run python -m poultry_monitoring.detection.yolo tune --data-dir <dir>       # hyperparameter search (yolo26n)
+uv run python -m poultry_monitoring.detection.yolo augtune --data-dir <dir>     # custom augmentation search (yolo26n)
+uv run python -m poultry_monitoring.detection.yolo train --data-dir <dir>        # fine-tune one size
+uv run python -m poultry_monitoring.detection.yolo sweep --data-dir <dir>         # tune, then train every size in --sizes
+uv run python -m poultry_monitoring.detection.yolo predict --weights <pt> --source <img>  # inference on custom images
 ```
 
-(Training/export/benchmark CLI entry points don't exist yet — Phase 0/2+ in `plan.md`. Update this section as they're built.)
+Export/benchmark CLI entry points don't exist yet — Phase 6 in `plan.md`. Update this section as they're built; keep `README.md`'s usage examples in sync too.
 
 ## Gitignore Reminders
 
