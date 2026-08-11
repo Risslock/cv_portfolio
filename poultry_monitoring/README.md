@@ -159,12 +159,14 @@ This table reflects the state as of the last update — [`plan.md`](plan.md) Pha
 
 ### Sample Predictions
 
-Two images from the **test split** — never used for training, tuning, or any validation-based decision — run through `yolo26n`'s final checkpoint (`conf=0.36`, CPU inference):
+Two images from the **test split** — never used for training, tuning, or any validation-based decision — run through `yolo26n`'s final checkpoint (`conf=0.36`, CPU inference). Ground truth alongside each prediction, same images:
 
-| ![Prediction example 1: dense overhead flock with detection boxes](docs/images/test_prediction_1.jpg) | ![Prediction example 2: dense overhead flock with detection boxes](docs/images/test_prediction_2.jpg) |
+| Ground truth | Prediction |
 |---|---|
+| ![Ground truth example 1: dense overhead flock, annotated boxes](docs/images/test_ground_truth_1.jpg) | ![Prediction example 1: dense overhead flock with detection boxes](docs/images/test_prediction_1.jpg) |
+| ![Ground truth example 2: dense overhead flock, annotated boxes](docs/images/test_ground_truth_2.jpg) | ![Prediction example 2: dense overhead flock with detection boxes](docs/images/test_prediction_2.jpg) |
 
-60 and 44 birds detected respectively, confidence mostly 0.8+ even in tightly overlapping clusters and against low-contrast litter. The overlapping labels in the densest clusters are the scene, not a rendering artifact — this is genuinely what "~23 birds/image, up to 50+" looks like at full resolution.
+56 ground-truth birds vs. 60 predicted in the first image, 42 vs. 44 in the second — close counts, and the extra predictions are mostly genuine partial birds at the frame edge that the model still caught. Confidence is mostly 0.8+ even in tightly overlapping clusters and against low-contrast litter. The overlapping labels in the densest clusters are the scene, not a rendering artifact — this is genuinely what "~23 birds/image, up to 50+" looks like at full resolution.
 
 ## Key Findings
 
@@ -187,6 +189,7 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 
 ### Production practices demonstrated along the way
 
+- **Task-separated, shared-utility package structure**: `src/poultry_monitoring/` — `data/`, `augmentation/`, `detection/` — each a small set of typed, docstringed functions, not one long script; a single CLI (`python -m poultry_monitoring.detection.yolo <command>`) drives tuning, training, progressive unfreezing, inference, and comparison runs.
 - **Experiment tracking**: every tuning/training run logged to MLflow (params, per-epoch metrics, final val metrics, artifacts) — see [`CLAUDE.md`](CLAUDE.md) § MLflow Conventions for the schema.
 - **Decision records**: 4 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner) rather than just asserting a conclusion.
 - **Exploratory-then-productionized workflow**: notebooks establish that an approach works; `src/poultry_monitoring/` is the redesigned, tested, CLI-driven version — not a line-for-line port (constitution Principle II).
