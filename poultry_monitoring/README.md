@@ -1,6 +1,12 @@
 # Poultry Monitoring: Object Detection & Instance Segmentation
 
+![Python](https://img.shields.io/badge/python-3.11%2B-blue) ![Framework](https://img.shields.io/badge/model-YOLO26-orange) ![Tracking](https://img.shields.io/badge/tracking-MLflow-blue) ![Status](https://img.shields.io/badge/status-in%20progress-yellow) ![Dataset License](https://img.shields.io/badge/dataset%20license-CC%20BY--NC--SA%204.0-lightgrey)
+
 Detecting and segmenting individual chickens in dense, overhead poultry farm imagery — a portfolio project applying modern object detection and segmentation architectures to an industrial computer vision problem. **YOLO26 is the primary deliverable**; a DETR track exists as separate practice with transformer architectures, not a gating comparison (see [`CLAUDE.md`](CLAUDE.md) § Project Intent).
+
+<p align="center">
+  <img src="docs/images/test_prediction_1.jpg" width="800" alt="YOLO26 detecting 60 chickens in a dense overhead farm image, held-out test split">
+</p>
 
 **Status:** 🟡 In progress — `yolo26n` tuned, trained, and progressively unfrozen (val mAP50 = 0.987, mAP50-95 = 0.892), now **ahead of** ChickenVerse's own published baseline; `yolo26s` trained (close on mAP50, gap remains on mAP50-95 — no unfreezing applied yet). See [Status](#status) for the full picture and [`plan.md`](plan.md) for the live phase-by-phase roadmap.
 
@@ -29,6 +35,12 @@ Detecting and segmenting individual chickens in dense, overhead poultry farm ima
 ### License
 
 ChickenVerse is released under **CC BY-NC-SA 4.0** (Attribution-NonCommercial-ShareAlike). It is used here strictly for **non-commercial, educational/portfolio purposes**, with attribution to the original authors. Any derivative work or adaptation must be shared under the same license.
+
+### Citation
+
+This project's models are trained entirely on ChickenVerse. If you use the dataset itself, cite the original work:
+
+> A. Amirivojdan et al., *"ChickenVerse: An Open Large-Scale Multi-Task Dataset for Chicken Detection, Segmentation, and Behavior Recognition,"* University of Tennessee. [doi.org/10.2139/ssrn.7232911](https://doi.org/10.2139/ssrn.7232911)
 
 ## Industrial Applications & Real-World Challenges
 

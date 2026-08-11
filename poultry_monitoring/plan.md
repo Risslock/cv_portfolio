@@ -76,6 +76,7 @@ Per the Albumentations-vs-DALI decision (constitution § Technology Stack): only
 ## Phase 7 — Write-Up
 
 - 🔲 Results tables + comparison charts in `README.md` (via `dataviz` skill — see `CLAUDE.md` § Skills)
+- 🔲 **Final results training-curve image**: the current `docs/images/training_curves_stage2.png` is deliberately scoped to illustrate the `close_mosaic` finding (Key Findings), not to represent "the" project's final result — capture a proper one once the full detection story settles (`multi_scale` outcome decided, any `yolo26s` unfreeze pass run), rather than repurposing a debugging-illustration image as the showcase curve
 - 🔲 Final narrative: YOLO26 (CNN, real-time, NMS-free) vs. DETR (transformer, set-prediction) tradeoffs, backed by the actual numbers from Phases 2-6
 
 ## Future Work (out of scope for now)
