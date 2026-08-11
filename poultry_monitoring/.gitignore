@@ -18,6 +18,9 @@ uv.lock.bak
 mlflow.db
 mlruns/
 
+# Optuna
+optuna.db
+
 # Per-run artifacts (weights, plots) — keep the folder, not its contents
 results/*
 !results/.gitkeep

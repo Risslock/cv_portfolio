@@ -64,7 +64,7 @@ AUGMENTATION_FOCUSED_SPACE = {
     "hsv_s": (0.0, 0.9),
     "hsv_v": (0.0, 0.9),
     "degrees": (0.0, 45.0),
-    "translate": (0.0, 0.9),
+    "translate": (0.0, 0.5),
     "scale": (0.0, 0.95),
     "shear": (0.0, 10.0),
     "perspective": (0.0, 0.001),
@@ -75,10 +75,8 @@ AUGMENTATION_FOCUSED_SPACE = {
     "mixup": (0.0, 1.0),
     "cutmix": (0.0, 1.0),
     "copy_paste": (0.0, 1.0),
-    "close_mosaic": (0.0, 10.0),
-    # Per-batch input-resolution jitter, distinct from `scale`'s per-image zoom/crop
-    # range. Conservative upper bound — ChickenDet is a fixed overhead rig.
-    "multi_scale": (0.0, 0.3),
+    "close_mosaic": (0.0, 3.0),
+    "multi_scale": (0.0, 0.5),
 }
 
 
@@ -180,6 +178,7 @@ def tune_hyperparameters(
     Returns:
         The best hyperparameters found, as a dict (built-in and custom keys together).
     """
+    import mlflow
     import optuna
 
     project = Path(project).resolve()
@@ -203,26 +202,36 @@ def tune_hyperparameters(
             k: v for k, v in sampled.items() if k not in CUSTOM_AUGMENTATION_PARAM_RANGES
         }
         model = YOLO(f"{model_name}.pt")
-        results = model.train(
-            data=str(Path(data_yaml).resolve()),
-            epochs=epochs,
-            fraction=fraction,
-            imgsz=imgsz,
-            seed=SEED,
-            freeze=FREEZE_LAYERS,
-            project=str(project),
-            name=f"tune-trial{trial.number}",
-            exist_ok=True,
-            plots=False,
-            augmentations=_build_custom_augmentations(sampled),
-            **hyperparameters,
-        )
-        fitness = results.results_dict["metrics/mAP50-95(B)"]
-        # Close this trial's run — MLFLOW_KEEP_RUN_ACTIVE leaves it open otherwise.
-        finish_run(extra_metrics={"box_map50_95": float(fitness)})
+        try:
+            results = model.train(
+                data=str(Path(data_yaml).resolve()),
+                epochs=epochs,
+                fraction=fraction,
+                imgsz=imgsz,
+                seed=SEED,
+                freeze=FREEZE_LAYERS,
+                project=str(project),
+                name=f"tune-trial{trial.number}",
+                exist_ok=True,
+                plots=False,
+                augmentations=_build_custom_augmentations(sampled),
+                **hyperparameters,
+            )
+            fitness = results.results_dict["metrics/mAP50-95(B)"]
+            finish_run(extra_metrics={"box_map50_95": float(fitness)})
+        except Exception:
+            if mlflow.active_run() is not None:
+                mlflow.end_run(status="FAILED")
+            return 0.0
         return fitness
 
-    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=SEED))
+    study = optuna.create_study(
+        study_name=f"tune-{model_name}",
+        storage=f"sqlite:///{Path('optuna.db').resolve()}",
+        load_if_exists=True,
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=SEED),
+    )
     study.optimize(objective, n_trials=iterations)
     return dict(study.best_params)
 
