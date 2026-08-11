@@ -410,10 +410,45 @@ def train(
 # AdamW(lr=0.002) during the size-sweep run) — auto's heuristic has no notion of "this is
 # a later refinement stage on an already-converged model," so a per-stage lr0 needs a
 # fixed optimizer to actually take effect.
+#
+# close_mosaic/patience picked per two rules-of-thumb (found after the first run of this
+# schedule used close_mosaic=10 inherited unchanged from the 300-epoch tuned config, which
+# on a 30-epoch stage disabled mosaic for the last 33% of it — visible as a sharp train-loss
+# drop + a transient val-loss/mAP50-95 dip right at the close_mosaic epoch, and likely why
+# that stage's early stopping locked in a near-that-epoch checkpoint):
+#   1. epochs >> close_mosaic — close_mosaic should be a small portion of a stage's epochs,
+#      not sized for a different (much longer) run.
+#   2. patience < close_mosaic — Ultralytics' best.pt always tracks the best-ever-observed
+#      validation fitness regardless of when training stops, so a patience shorter than
+#      close_mosaic acts as a bounded trial window: if training without mosaic is hurting
+#      validation, patience stops the run (and best.pt stays pinned at the last good,
+#      likely pre-transition checkpoint) before the rest of the close_mosaic tail is spent
+#      on a regime that isn't working.
 DEFAULT_UNFREEZE_STAGES = [
-    {"freeze": 10, "lr0": 5e-4, "optimizer": "AdamW", "epochs": 30, "patience": 10},
-    {"freeze": 5, "lr0": 1e-4, "optimizer": "AdamW", "epochs": 30, "patience": 10},
-    {"freeze": 0, "lr0": 2e-5, "optimizer": "AdamW", "epochs": 30, "patience": 10},
+    {
+        "freeze": 10,
+        "lr0": 5e-4,
+        "optimizer": "AdamW",
+        "epochs": 30,
+        "patience": 3,
+        "close_mosaic": 4,
+    },
+    {
+        "freeze": 5,
+        "lr0": 1e-4,
+        "optimizer": "AdamW",
+        "epochs": 30,
+        "patience": 3,
+        "close_mosaic": 4,
+    },
+    {
+        "freeze": 0,
+        "lr0": 2e-5,
+        "optimizer": "AdamW",
+        "epochs": 30,
+        "patience": 3,
+        "close_mosaic": 4,
+    },
 ]
 
 
@@ -439,10 +474,12 @@ def progressive_unfreeze_train(
         model_name: Ultralytics model name for MLflow naming, e.g. `"yolo26n"`.
         initial_weights: Starting checkpoint — typically a prior `TrainOutcome.weights_path`.
         hyperparameters: Fixed hyperparameters (e.g. `tune_augmentation_parameters`'s
-            result) applied to every stage; each stage's own `lr0`/`optimizer` override
-            whatever this dict has for those two keys specifically.
-        stages: List of `{"freeze", "lr0", "optimizer", "epochs", "patience"}` dicts, in
-            order. Defaults to `DEFAULT_UNFREEZE_STAGES`.
+            result) applied to every stage; each stage's own `lr0`/`optimizer` (and
+            `close_mosaic`, if the stage dict has one) override whatever this dict has
+            for those keys specifically.
+        stages: List of `{"freeze", "lr0", "optimizer", "epochs", "patience"}` dicts
+            (`"close_mosaic"` optional — see `DEFAULT_UNFREEZE_STAGES`'s close_mosaic/
+            patience rules-of-thumb), in order. Defaults to `DEFAULT_UNFREEZE_STAGES`.
         fraction: Fraction of the training set to use, every stage.
 
     Returns:
@@ -457,6 +494,8 @@ def progressive_unfreeze_train(
             "lr0": stage["lr0"],
             "optimizer": stage["optimizer"],
         }
+        if "close_mosaic" in stage:
+            stage_hyperparameters["close_mosaic"] = stage["close_mosaic"]
         outcome = train(
             data_yaml,
             project,
