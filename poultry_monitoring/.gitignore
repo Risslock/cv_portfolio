@@ -2,9 +2,17 @@
 .venv/
 uv.lock.bak
 
-# Dataset cache (ChickenVerse — large, re-downloadable, CC BY-NC-SA licensed, don't redistribute via git)
-data/
-!data/.gitkeep
+# Dataset cache (ChickenVerse — large, re-downloadable, CC BY-NC-SA licensed, don't redistribute
+# via git). Anchored to the repo root (`/data/`) — an unanchored `data/` would also match
+# `src/poultry_monitoring/data/`, silently hiding that first-party package from git.
+/data/
+!/data/.gitkeep
+
+# The monorepo root .gitignore also has a generic (unanchored) `data/` rule from its Python
+# template, meant for sibling projects' dataset caches — it would otherwise swallow this
+# first-party package the same way the rule above (now fixed) did. Explicitly un-ignore it.
+!/src/poultry_monitoring/data/
+!/src/poultry_monitoring/data/**
 
 # MLflow
 mlflow.db

@@ -8,44 +8,54 @@ Legend: 🔲 not started · 🟡 in progress · ✅ done · ⏭️ stretch/defer
 
 - ✅ Download ChickenVerse (ChickenDet split) from Zenodo; verify COCO annotation loading (boxes + masks) for train/val/test splits
 - 🔲 Scaffold `src/poultry_monitoring/` package (see `CLAUDE.md` § Package Layout)
-- 🔲 `uv init` + `pyproject.toml` with `torch`/`torchvision` pinned to a CUDA wheel index, `ultralytics`, `transformers`, `mlflow`, dev deps (`ruff`, `pytest`)
-- 🔲 Verify `torch.cuda.is_available()` is `True` in the new local venv (see constitution Principle IX — don't repeat the `fashion_MNIST`/CPU-wheel mistake)
-- 🔲 `.gitignore`, MLflow SQLite tracking store wired up
+- ✅ `pyproject.toml` with `torch`/`torchvision` pinned to a CUDA wheel index, `ultralytics`, `transformers`, `mlflow`, dev deps (`ruff`, `pytest`, `jupyter`, `ipykernel`, `torchinfo`)
+- ✅ Verify `torch.cuda.is_available()` is `True` in the local venv — confirmed against the local RTX 2060 SUPER (see constitution Principle IX)
+- 🟡 `.gitignore` done; MLflow SQLite tracking store not yet wired up (no `mlflow_utils.py`, no runs logged yet)
 
-## Phase 1 — Exploration & Learning (Colab notebooks)
+## Phase 1 — Exploration & Learning (notebooks)
 
-Per constitution Principle II: this phase happens on **Google Colab** (free T4 GPU), not the local env — it's where the actual learning about these two architectures happens before anything gets productionized.
+Per constitution Principle II: each new capability starts as a notebook — on **Google Colab** or the local GPU env (Principle IX), whichever's more convenient — before anything gets productionized.
 
 - ✅ Notebook: load + visualize ChickenDet (boxes + masks, density distribution across splits) — see `notebooks/01_explore_chickenverse.ipynb` Notes section
-- 🟡 Notebook: first YOLO26 fine-tune (detection) on a subset — sanity-check the `ultralytics` API, default hyperparameters, output format — scaffolded in `notebooks/02_yolo26_baseline.ipynb`, TODOs to fill in on Colab
-- 🔲 Notebook: first DETR fine-tune (detection) on a subset — sanity-check the `transformers` training loop, Hungarian matching loss behavior, output format
+- ✅ Notebook: first YOLO26 fine-tune (detection) on a subset — `notebooks/02_yolo26_baseline.ipynb`, run **locally** end-to-end (RTX 2060 SUPER). Quick-sanity config (`fraction=0.1`, 20 epochs, `yolo26n`): **box mAP50 = 0.953, mAP50-95 = 0.799, precision = 0.940, recall = 0.878** — API confirmed solid and the baseline signal is already strong; see the notebook's Notes section for the hyperparameter/API learnings.
+- 🔲 Notebook: first DETR fine-tune (detection) on a subset — sanity-check the `transformers` training loop, Hungarian matching loss behavior, output format. **Next up** — needed before any YOLO26-vs-DETR comparison claim per constitution Principle IV.
 - 🔲 Notebook: prototype segmentation heads for both (YOLO26-seg; DETR panoptic head or Mask2Former fallback)
 - 🔲 Notebook: prototype augmentation ideas (mosaic/copy-paste, occlusion-aware crops) and eyeball results visually
-- 🔲 Notebook: sanity-check DALI availability/behavior on Colab as an early signal, even though the real DALI work happens locally (Phase 5)
-- 🔲 Capture what was learned from each notebook (API quirks, what worked/didn't) — this is the design input for Phases 2-6, per constitution Principle II
+- 🔲 Notebook: sanity-check DALI availability/behavior as an early signal, even though the real DALI work happens locally (Phase 5)
+- 🟡 Capture what was learned from each notebook (API quirks, what worked/didn't) — done for notebooks 01/02, pending for the rest — this is the design input for Phases 2-6, per constitution Principle II
 
-## Phase 2 — Detection Baseline (productionized)
+## Phase 2 — YOLO26 Detection, Productionized (current priority)
 
-- 🔲 YOLO26n/s detection fine-tune on ChickenDet, standard `DataLoader`, no custom augmentation
-- 🔲 DETR detection baseline (Hugging Face `transformers`) on the same splits
-- 🔲 Log both to MLflow under identical metric names (box mAP@50, mAP@50-95); note any split/config asymmetry per constitution Principle IV
+Per the Project Intent correction in `CLAUDE.md`: YOLO26 is the model actually being productionized here — this phase is the immediate next work, not gated on a DETR baseline. Scope, being scoped with the user:
+
+- ✅ Scaffold `src/poultry_monitoring/` (`data/coco.py` — COCO parsing/conversion, productionized from notebook 02; `mlflow_utils.py` — thin wrapper around Ultralytics' native MLflow integration, not hand-rolled logging)
+- 🔲 `detection/yolo.py` (train/tune/predict wrappers, native `ultralytics.YOLO` usage per constitution Principle I)
+- 🔲 Hyperparameter tuning via Ultralytics' native `model.tune()` (genetic-algorithm search) on `yolo26n`, on top of notebook 02's sane starting point (`freeze=10`, `lr0=0.001`) — its default search space already covers Ultralytics' own augmentation hyperparameters (`mosaic`, `hsv_*`, `degrees`, `flipud`/`fliplr`, `copy_paste`, etc.), so this also functions as the augmentation-magnitude search for those
+- 🔲 Domain-specific augmentation via a custom Albumentations pipeline (see § Technology Stack — chosen over relying solely on Ultralytics' built-ins), wired into the training `YOLODataset` alongside the above; complements rather than duplicates what `model.tune()` already searches (occlusion simulation, farm lighting/weather variation, sensor noise — not just magnitude sweeps on transforms Ultralytics already has)
+- 🔲 Size sweep: apply the tuned hyperparameters + augmentation pipeline to `yolo26n` and `yolo26s`, full dataset, not the quick-sanity 10% subset
+- 🔲 Every run (tuning trials + final size-sweep runs) logged to the `poultry_detection` MLflow experiment via the native integration: params, hyperparams, metrics (`box_map50`, `box_map50_95`, per-epoch losses), and artifacts, per `CLAUDE.md` § MLflow Conventions
+- ⏭️ DETR detection baseline (Hugging Face `transformers`) — secondary/practice track, pursued when there's time; not required before calling YOLO26 detection "done," and not a blocker for Phase 3
 
 ## Phase 3 — Segmentation Baseline (productionized)
 
-- 🔲 YOLO26-seg fine-tune on ChickenDet masks
-- 🔲 DETR segmentation-capable variant (native panoptic/mask head, or swap to Mask2Former if it underperforms, per Phase 1 findings)
-- 🔲 Log mask mAP@50 / mAP@50-95 for both, same disclosure rule as Phase 2
+- 🔲 YOLO26-seg fine-tune on ChickenDet masks — same tuning/sweep/MLflow treatment as Phase 2
+- ⏭️ DETR segmentation-capable variant (native panoptic/mask head, or Mask2Former) — secondary/practice track, same as the Phase 2 DETR item
+- 🔲 Log mask mAP@50 / mAP@50-95 to the `poultry_segmentation` MLflow experiment
 
-## Phase 4 — Domain-Specific Augmentation
+## Phase 4 — Extend Augmentation to Segmentation (+ DETR parity)
 
-- 🔲 Occlusion-aware crops, mosaic/copy-paste, lighting/color jitter (Ultralytics built-ins for YOLO26; custom `albumentations` pipeline for DETR parity)
-- 🔲 Re-run detection + segmentation baselines with augmentation on; measure delta over Phase 2/3 numbers
+The core Albumentations decision and the YOLO26 pipeline integration happen in Phase 2 now, not here — this phase is what's left once segmentation exists.
 
-## Phase 5 — DALI Accelerated Loading
+- 🔲 Extend Phase 2's Albumentations pipeline with mask-aware transforms for `detection/segmentation` parity
+- ⏭️ Custom `albumentations` pipeline for DETR (secondary/practice track, same status as the DETR items in Phases 2-3)
+- 🔲 Re-run the segmentation baseline with augmentation on; measure delta over Phase 3's number
 
-- 🔲 Resolve DALI's Linux/CUDA packaging story on the local Windows env (unconfirmed — see constitution Principle IX)
-- 🔲 Build GPU-accelerated decode+augment DALI pipeline
-- 🔲 Benchmark throughput (img/sec) against the standard `DataLoader` baseline, per constitution Principle V (hardware/batch size/precision disclosed)
+## Phase 5 — DALI, If Profiling Justifies It
+
+Per the Albumentations-vs-DALI decision (constitution § Technology Stack): only pursue this if Phase 2-4's standard `DataLoader` + Albumentations pipeline is actually shown to be the training-speed bottleneck — not a given.
+
+- 🔲 Profile the Phase 2 training loop (data loading vs. GPU compute time) to check whether this phase is even warranted
+- 🔲 If justified: resolve DALI's Linux/CUDA packaging story on the local Windows env (unconfirmed — see constitution Principle IX), build a GPU-accelerated decode pipeline, benchmark throughput (img/sec) against the standard `DataLoader` + Albumentations baseline, per constitution Principle V (hardware/batch size/precision disclosed)
 
 ## Phase 6 — Export & Optimization
 
@@ -92,4 +102,4 @@ Per constitution Principle II: this phase happens on **Google Colab** (free T4 G
 
 ## Status
 
-🚧 Planning complete (this file + `constitution.md` + `CLAUDE.md`). Phase 0 not yet started.
+🟡 Phase 0 mostly done (env verified GPU-capable locally; package scaffold + MLflow wiring still open). Phase 1's YOLO26 baseline notebook is done with a strong quick-sanity result (box mAP50 = 0.953). **Current priority: Phase 2** — productionize YOLO26 (hyperparameter tuning, a size sweep, MLflow-tracked runs). DETR is a secondary/practice track (⏭️ throughout Phases 2-3), not a gate on this work — see `CLAUDE.md` § Project Intent.

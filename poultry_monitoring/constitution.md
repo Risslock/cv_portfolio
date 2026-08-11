@@ -12,7 +12,7 @@ All first-party code (data loading, augmentation, DALI pipeline, export, benchma
 
 ### II. Notebook-First Exploration, Then Productionize
 
-Each major new capability (a model family's first fine-tune, a new augmentation idea, the DALI pipeline, an export path) MUST start as a Jupyter notebook — run on Google Colab's free T4, or on the local GPU environment (Principle IX) once one is available and preferred — before being productionized into `src/poultry_monitoring/`. The notebook establishes *that it works* and is kept as the record of that exploration; the productionized function is not required to mirror it line-for-line — improving structure, naming, or approach while translating is expected and encouraged, not just tolerated. Deliberate deviations worth remembering (a redesign, not just a refactor) SHOULD be noted in the module docstring or a short comment, so it's clear the notebook and the shipped code are meant to differ there.
+Each major new capability (a model family's first fine-tune, a new augmentation idea, the DALI pipeline, an export path) MUST start as a Jupyter notebook — run on Google Colab's free T4, or on the local `uv`-managed GPU environment (Principle IX), whichever's more convenient at the time — before being productionized into `src/poultry_monitoring/`. The notebook establishes *that it works* and is kept as the record of that exploration; the productionized function is not required to mirror it line-for-line — improving structure, naming, or approach while translating is expected and encouraged, not just tolerated. Deliberate deviations worth remembering (a redesign, not just a refactor) SHOULD be noted in the module docstring or a short comment, so it's clear the notebook and the shipped code are meant to differ there.
 
 **Rationale**: Separates the learning/exploration loop (fast iteration, visual feedback, free GPU, no packaging overhead) from the production loop (reusable, testable, best-practice functions gated per Principle VIII). Unlike `fashion_MNIST` — a small, already-correct reference notebook — this project's notebooks are exploratory by nature (two unfamiliar architectures, new pipeline components), so faithfully preserving their behavior isn't the goal; capturing *what was learned* is.
 
@@ -20,11 +20,11 @@ Each major new capability (a model family's first fine-tune, a new augmentation 
 
 The package is organized by **task** (`detection/` vs. `segmentation/`), not by model family — each task directory holds both models' wrappers (`yolo.py`, `detr.py`) side by side. Genuinely shared logic (COCO/data loading, the DALI pipeline, MLflow helpers, the benchmarking harness, metric computation) lives once in shared top-level modules — never duplicated per task or per model.
 
-**Rationale**: The portfolio story is a head-to-head comparison; keeping both models' code for a given task together makes that comparison legible in the source itself, not just in results.
+**Rationale**: Keeping both models' code for a given task together keeps the codebase legible task-by-task regardless of which model is currently getting attention, and leaves a fair comparison possible in the source itself if/when Principle IV's comparison work happens — without making that comparison the reason the structure exists (see Principle IV and `CLAUDE.md` § Project Intent: YOLO26 is the primary deliverable, DETR a secondary practice track).
 
-### IV. Fair Head-to-Head Comparison (SHOULD)
+### IV. Fair Head-to-Head Comparison, If and When Made (SHOULD)
 
-YOLO26 and DETR SHOULD be evaluated on identical train/val/test splits with identical metrics (box mAP@50 / mAP@50-95 for detection, mask mAP for segmentation) whenever a comparison claim is made in the README or results write-up. If a deviation is necessary (e.g. DETR needing a different image size, or a segmentation-capable variant swapped in), it SHOULD be stated explicitly next to the claim, not left implicit.
+YOLO26 is this project's primary deliverable; DETR is a secondary track pursued as the user's own transformer-architecture practice, not a requirement for calling YOLO26's detection/segmentation work done. Comparison is not the project's goal for its own sake — but *if* a comparison claim is ever made in the README or results write-up, YOLO26 and DETR SHOULD be evaluated on identical train/val/test splits with identical metrics (box mAP@50 / mAP@50-95 for detection, mask mAP for segmentation). If a deviation is necessary (e.g. DETR needing a different image size, or a segmentation-capable variant swapped in), it SHOULD be stated explicitly next to the claim, not left implicit.
 
 **Rationale**: A soft rule, not a hard gate — real constraints (compute, framework quirks) may force asymmetries. What matters is that asymmetries are disclosed, not eliminated at all costs.
 
@@ -63,7 +63,8 @@ Two GPU-capable environments, not mutually exclusive: **Google Colab** (free T4 
 - **Training framework**: PyTorch (via `ultralytics` for YOLO26, via `transformers` for DETR)
 - **Models**: YOLO26 (Ultralytics) and DETR (Hugging Face `transformers`), both for detection and instance segmentation
 - **Dataset**: ChickenVerse / ChickenDet (COCO-format boxes + masks)
-- **Data loading**: standard PyTorch `DataLoader` baseline, NVIDIA DALI as the accelerated alternative (Phase 4)
+- **Augmentation**: [Albumentations](https://albumentations.ai/) — chosen over DALI for augmentation specifically ([rationale](https://albumentations.ai/docs/albumentations-vs-dali/)): richer target-aware transform set (bbox/mask/keypoint-aware in one `A.Compose`), reproducible/serializable configs, no GPU-memory contention with training itself. Runs CPU-side during data loading.
+- **Data loading**: standard PyTorch `DataLoader` baseline; NVIDIA DALI evaluated later (Phase 5) purely as a decode/loading throughput optimization, only if profiling shows the data path — not the augmentation step — is the actual bottleneck (per the Albumentations-vs-DALI rationale above)
 - **Experiment tracking**: MLflow, local SQLite backend
 - **Export**: ONNX Runtime (both models), TensorFlow Lite / LiteRT (YOLO26 native; DETR stretch goal)
 - **Dependency management**: `uv` with `pyproject.toml` + `uv.lock`
