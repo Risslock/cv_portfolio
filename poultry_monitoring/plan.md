@@ -71,7 +71,7 @@ Per the Albumentations-vs-DALI decision (constitution § Technology Stack): only
 - 🔲 Export both models to ONNX Runtime; verify inference parity vs. native PyTorch
 - 🔲 Export YOLO26 to LiteRT (native support); attempt DETR → ONNX → `onnx2tf` → LiteRT as a stretch goal (⏭️ if it doesn't convert cleanly)
 - 🔲 INT8 quantization via `onnxruntime.quantization` for both models
-- 🔲 Benchmark latency/throughput: CPU vs. GPU vs. (if available) an edge target, FP32 vs. INT8
+- 🔲 Benchmark latency/throughput: CPU vs. GPU vs. (if available) an edge target, FP32 vs. INT8. **Informal reference point already in hand** (single run, not a real benchmark — no warmup/averaging, constitution Principle V not yet satisfied): `yolo26n` PyTorch, CPU, single image, 384×640, this machine — 267.7ms inference (2.9ms preprocess, 4.1ms postprocess). Useful as a rough "is export actually helping" sanity check once ONNX/LiteRT numbers exist, not a citable result on its own.
 
 ## Phase 7 — Write-Up
 

@@ -157,12 +157,23 @@ All numbers are validation-split metrics from an explicit `model.val()` pass aft
 
 This table reflects the state as of the last update — [`plan.md`](plan.md) Phase 2 is the live source of truth for anything still in flight.
 
+### Sample Predictions
+
+Two images from the **test split** — never used for training, tuning, or any validation-based decision — run through `yolo26n`'s final checkpoint (`conf=0.36`, CPU inference):
+
+| ![Prediction example 1: dense overhead flock with detection boxes](docs/images/test_prediction_1.jpg) | ![Prediction example 2: dense overhead flock with detection boxes](docs/images/test_prediction_2.jpg) |
+|---|---|
+
+60 and 44 birds detected respectively, confidence mostly 0.8+ even in tightly overlapping clusters and against low-contrast litter. The overlapping labels in the densest clusters are the scene, not a rendering artifact — this is genuinely what "~23 birds/image, up to 50+" looks like at full resolution.
+
 ## Key Findings
 
 Learnings worth keeping visible here, not just buried in `plan.md`'s working history:
 
 - **Test-time preprocessing doesn't help** ([ADR 0004](docs/adr/0004-no-test-time-preprocessing.md)) — autocontrast/CLAHE/histogram-equalization applied only at inference (no retraining) on a trained checkpoint were flat-to-negative: autocontrast was a wash (≤0.001 on every metric — the model already saw similarly mild autocontrast during training), while CLAHE and histogram-equalization measurably hurt (−0.013 to −0.014 mAP50-95) by creating a train/inference distribution mismatch instead of correcting one.
-- **`close_mosaic` must scale with stage length, not get inherited from a different run's tune result** — reusing `close_mosaic=10` (sized for a 300-epoch run) unchanged on 30-epoch progressive-unfreezing stages disabled mosaic for the last third of each stage, visible as a sharp train-loss drop plus a transient val-loss/mAP50-95 dip right at the transition epoch. Fixed with two rules of thumb: `epochs >> close_mosaic`, and `patience < close_mosaic` (since Ultralytics' `best.pt` always tracks the best-ever-observed fitness regardless of when training stops, a shorter patience bounds how much of a bad post-transition regime gets trained through before reverting).
+- **`close_mosaic` must scale with stage length, not get inherited from a different run's tune result** — reusing `close_mosaic=10` (sized for a 300-epoch run) unchanged on 30-epoch progressive-unfreezing stages disabled mosaic for the last third of each stage, visible below as a sharp train-loss drop plus a transient val-loss/mAP50-95 dip right at epoch 20 (mosaic switches off at `epoch == epochs - close_mosaic`). Fixed with two rules of thumb: `epochs >> close_mosaic`, and `patience < close_mosaic` (since Ultralytics' `best.pt` always tracks the best-ever-observed fitness regardless of when training stops, a shorter patience bounds how much of a bad post-transition regime gets trained through before reverting).
+
+  ![Training curves for the final progressive-unfreezing stage, showing the mAP50-95 dip and recovery right at the close_mosaic transition (epoch 20 of 30)](docs/images/training_curves_stage2.png)
 - **`AutoContrast`'s cutoff needed to vary per-application, not get tuned to one fixed value** — Albumentations' `RandomBrightnessContrast` auto-symmetrizes a tuned scalar into a fresh `±range` every call, but `AutoContrast.cutoff` doesn't have that built in; the augmentation search had converged it to a single always-identical value. Fixed with a small subclass that resamples `cutoff` from a fixed range each application instead.
 - **`copy_paste_mode` (`"flip"` vs `"mixup"`) is a wash at proxy scale** — every metric within 0.006 between the two; not a meaningful lever for this dataset as tested, despite a real theoretical scale-mismatch risk for `"mixup"` (unmatched cutout/background scale) that didn't clearly show up in the numbers either.
 
