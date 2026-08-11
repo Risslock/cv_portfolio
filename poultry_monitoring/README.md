@@ -8,7 +8,7 @@ Detecting and segmenting individual chickens in dense, overhead poultry farm ima
   <img src="docs/images/test_prediction_1.jpg" width="800" alt="YOLO26 detecting 60 chickens in a dense overhead farm image, held-out test split">
 </p>
 
-**Status:** 🟡 In progress — `yolo26n` tuned, trained, and progressively unfrozen (val mAP50 = 0.987, mAP50-95 = 0.892), now **ahead of** ChickenVerse's own published baseline; `yolo26s` trained (close on mAP50, gap remains on mAP50-95 — no unfreezing applied yet). See [Status](#status) for the full picture and [`plan.md`](plan.md) for the live phase-by-phase roadmap.
+**Status:** 🟡 In progress — `yolo26n` tuned, trained, and progressively unfrozen (val mAP50 = 0.987, mAP50-95 = 0.892), comparable to ChickenVerse's own published baseline; `yolo26s` trained (close on mAP50, gap remains on mAP50-95 — no unfreezing applied yet). See [Status](#status) for the full picture and [`plan.md`](plan.md) for the live phase-by-phase roadmap.
 
 ## Table of Contents
 
@@ -160,12 +160,28 @@ Export/benchmark CLI entry points don't exist yet — Phase 6 in [`plan.md`](pla
 
 | Model | Split | Precision | Recall | mAP50 | mAP50-95 | Notes |
 |---|---|---|---|---|---|---|
-| `yolo26n` (this project) | val | 0.965 | 0.953 | **0.987** | **0.892** | Tuned hyperparameters + custom augmentation + progressive unfreezing (3 stages, `freeze` 10→5→0), full dataset. |
-| `yolo26n` (ChickenVerse published) | val | — | — | 0.987 | 0.890 | Reference baseline, same architecture/scale — **we're now ahead on both columns.** |
+| `yolo26n` (this project) | val | 0.965 | 0.953 | 0.987 | 0.892 | Tuned hyperparameters + custom augmentation + progressive unfreezing (3 stages, `freeze` 10→5→0), full dataset. |
+| `yolo26n` (ChickenVerse published) | val | — | — | 0.987 | 0.890 | Reference baseline, same architecture/scale — effectively the same result (Δ ≤ 0.002, within run-to-run noise), reached via a different training approach; see below. |
 | `yolo26s` (this project) | val | 0.967 | 0.951 | 0.989 | 0.904 | Tuned config, straight `train()` — **no** progressive unfreezing applied yet. |
 | `yolo26s` (ChickenVerse published) | val | — | — | 0.990 | 0.919 | Reference baseline — close on mAP50, a real gap remains on mAP50-95 (same shape `yolo26n` had *before* unfreezing). |
 
 All numbers are validation-split metrics from an explicit `model.val()` pass after training (not training-loop numbers). ChickenVerse's own benchmark table reports two separate mAP columns — only the `val_mAP50`/`val_mAP50-95` ones are comparable to the numbers above; see [`plan.md`](plan.md) Phase 2 for the full note. **The test split is intentionally not used for any comparison or tuning decision**, to avoid implicitly fitting it.
+
+### Training Configuration
+
+`yolo26n`'s result above lands within noise of ChickenVerse's own published number, but the two were reached through different training setups — the interesting comparison is the approach, not the third decimal place:
+
+| Parameter | This project | ChickenVerse ([source](https://github.com/amirivojdan/ChickenVerse)) |
+|---|---|---|
+| Epochs | ~94–121 (initial, patience-based) + 3×30 (progressive unfreezing) | 20 (fixed) |
+| Patience | 15 (initial), 3 (unfreeze stages) | 10 |
+| Layer freezing | Progressive: 3 stages, `freeze` 10→5→0, `lr0` 5e-4→1e-4→2e-5 | None apparent in their training notebook — a single `model.train()` call per model variant |
+| Hyperparameter search | Ultralytics genetic tuner (20 iterations) + custom random search (8 trials) | Fixed, not searched |
+| Custom augmentation | Color invariance, lighting/contrast, randomized autocontrast, occlusion simulation (Albumentations) | Ultralytics' stock augmentation, unmodified |
+| Batch size | Ultralytics auto-batch | 16 (fixed) |
+| Experiment tracking | Every run logged to MLflow | Not present in their notebook |
+
+Comparable results from meaningfully different budgets and approaches — theirs a straightforward, fast 20-epoch benchmark across 8 model variants in one notebook; this project's a slower, deliberately tuned/searched/unfrozen path on one model at a time.
 
 This table reflects the state as of the last update — [`plan.md`](plan.md) Phase 2 is the live source of truth for anything still in flight.
 
@@ -195,7 +211,7 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 
 ### Detection track — done
 
-1. **Fine-tuned and hyperparameter-optimized a CNN-based detector (YOLO26)** to a genuinely strong result on a dense, occluded dataset: `yolo26n` beats ChickenVerse's own published baseline on both mAP50 and mAP50-95 after a built-in hyperparameter search, a custom-augmentation random search, and progressive unfreezing — see [Results](#results).
+1. **Fine-tuned and hyperparameter-optimized a CNN-based detector (YOLO26)** to a genuinely strong result on a dense, occluded dataset: `yolo26n` lands within noise of ChickenVerse's own published baseline after a built-in hyperparameter search, a custom-augmentation random search, and progressive unfreezing — see [Results](#results) for the numbers and [Training Configuration](#training-configuration) for how the two setups actually differ.
 2. **Built a domain-specific augmentation strategy** for dense, small, occluded objects: Albumentations-based color-invariance, lighting, and occlusion-simulation transforms, searched alongside Ultralytics' own hyperparameters, with a bounding-box-aware visualization CLI to eyeball the effect before committing to a search.
 3. **Ran and documented negative results, not just wins**: test-time preprocessing and `copy_paste_mode` A/B both came back flat-or-negative — kept and written up (ADR + README [Key Findings](#key-findings)) instead of quietly dropped, because knowing what *doesn't* help is part of the actual engineering record.
 
@@ -229,4 +245,4 @@ This project uses a hybrid workflow — heavier than a single `CLAUDE.md`, light
 
 ## Status
 
-🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. `yolo26n` is fully trained through progressive unfreezing and now beats ChickenVerse's published baseline; `yolo26s` is trained but hasn't had the same unfreezing treatment yet (see [Results](#results)). `copy_paste_mode` A/B and test-time-preprocessing comparisons are done (see [Key Findings](#key-findings)); a `multi_scale` hyperparameter re-tune is running now. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.
+🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. `yolo26n` is fully trained through progressive unfreezing and lands within noise of ChickenVerse's published baseline; `yolo26s` is trained but hasn't had the same unfreezing treatment yet (see [Results](#results)). `copy_paste_mode` A/B and test-time-preprocessing comparisons are done (see [Key Findings](#key-findings)); a `multi_scale` hyperparameter re-tune is running now. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.
