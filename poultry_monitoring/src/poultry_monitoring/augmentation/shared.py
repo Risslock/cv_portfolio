@@ -14,8 +14,6 @@ space doesn't: color-channel invariance and the "washed-out white chicken" contr
 problem noted in notebook 02's Notes section.
 """
 
-import random
-
 import albumentations as A
 
 # Every keyword `build_domain_transforms` accepts, and the range `detection/yolo.py`'s
@@ -49,6 +47,12 @@ class _RandomCutoffAutoContrast(A.AutoContrast):
     threading it through `get_params()`'s params dict, so `get_params()` mutates
     `self.cutoff` as a side effect instead of returning it — the standard `apply()`
     inherited from `AutoContrast` then picks up the fresh value on the next call.
+
+    Draws from `self.py_random` (Albumentations' own per-transform seeded RNG, reset by
+    `set_random_seed`/`Compose`'s pipeline seed), not the bare `random` module — using
+    the latter silently broke seeded reproducibility (`generate_augmented_samples`'
+    `seed=` argument had no effect on this transform's draws), caught by
+    `test_seed_gives_reproducible_draws` once the full suite finally ran again.
     """
 
     def __init__(
@@ -61,7 +65,7 @@ class _RandomCutoffAutoContrast(A.AutoContrast):
 
     def get_params(self) -> dict:
         """Sample a fresh `cutoff` for this application; nothing to thread via params."""
-        self.cutoff = random.uniform(*self.cutoff_range)
+        self.cutoff = self.py_random.uniform(*self.cutoff_range)
         return {}
 
 

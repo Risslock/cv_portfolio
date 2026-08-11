@@ -54,10 +54,10 @@ FREEZE_LAYERS = 10
 CUSTOM_AUGMENTATION_PARAM_RANGES = {**aug_shared.PARAM_RANGES, **aug_detection.PARAM_RANGES}
 
 # Focused on augmentation + lr0 rather than Ultralytics' full default space (also sweeps
-# momentum/weight_decay/warmup/loss weights — not this project's current focus). A
-# custom `space=` *replaces* the default (not merged), so every built-in augmentation
-# hyperparameter is listed explicitly. Excludes this project's own Albumentations
-# parameters on purpose — see docs/adr/0001-custom-augmentation-search-separate-from-tuner.md.
+# momentum/weight_decay/warmup/loss weights — not this project's current focus). Passed
+# to Optuna as `{name: (low, high)}`, so every built-in augmentation hyperparameter is
+# listed explicitly. Excludes this project's own Albumentations parameters on purpose —
+# see docs/adr/0001-custom-augmentation-search-separate-from-tuner.md.
 AUGMENTATION_FOCUSED_SPACE = {
     "lr0": (1e-5, 1e-2),
     "hsv_h": (0.0, 0.1),
@@ -158,50 +158,98 @@ def tune_hyperparameters(
     imgsz: int = 640,
     space: dict | None = None,
 ) -> dict:
-    """Search YOLO26 hyperparameters with Ultralytics' native genetic-algorithm tuner.
+    """Search YOLO26 hyperparameters with Optuna's TPE sampler.
 
-    Runs `iterations` short training trials, each `epochs` epochs on `fraction` of the
-    data, mutating hyperparameters toward better fitness. Each trial is its own MLflow
-    run in `DETECTION_EXPERIMENT` (Ultralytics' native integration — `mlflow_utils.py`),
-    with MLflow's own auto-generated run name.
+    Runs `iterations` independent, in-process trials (fresh `model.train()` call each,
+    `epochs` epochs on `fraction` of the data), each its own MLflow run in
+    `DETECTION_EXPERIMENT` (Ultralytics' native integration — `mlflow_utils.py`).
 
-    Doesn't cover this project's own Albumentations transforms — every trial gets
-    Ultralytics' bare-minimum default touch instead (effectively off). See
-    `tune_augmentation_parameters` for that search, and
-    docs/adr/0001-custom-augmentation-search-separate-from-tuner.md for why they're split.
+    Not Ultralytics' native `model.tune()` — see
+    docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md: its mutation is
+    multiplicative from the current population, so a parameter starting at (or
+    converging to) a fixed value can never be meaningfully explored across a wide range.
+    Optuna's default `TPESampler` draws independently across the *full* given range for
+    its startup trials (pure random, `n_startup_trials=10` by default) before switching
+    to model-guided sampling — genuinely spans `space`, not just nudges around a start.
+    Ray Tune (a from-scratch-random alternative) was considered first but doesn't ship
+    Windows wheels for Python 3.13 in this project's environment (see the ADR).
+
+    Covers this project's own Albumentations transforms too by default (`space` merges
+    `AUGMENTATION_FOCUSED_SPACE` and `CUSTOM_AUGMENTATION_PARAM_RANGES`) — a genuine joint
+    search, not the two-pass split `tune_augmentation_parameters` needed when the only
+    available mechanism was `model.tune()`'s subprocess-per-trial execution (ADR 0001).
+    Running in-process here means a plain `augmentations=` kwarg on `model.train()` just
+    works, same as `train()` itself. `tune_augmentation_parameters` still exists for a
+    genuinely different strategy — sequential/coordinate search (fix hyperparameters,
+    then search augmentation under them) is cheaper per pass and a legitimate choice, not
+    strictly obsoleted by joint search; the two aren't answering the same question, and
+    `run_size_sweep` still runs both in sequence today (worth a fresh look once this
+    joint mode has real search results to compare against — not decided here).
 
     Args:
         data_yaml: Path to the dataset YAML (`prepare_data`'s return value).
-        project: Local save dir for tuning artifacts (`<project>/tune/`).
+        project: Local save dir for tuning artifacts (`<project>/tune-trial<N>/`).
         model_name: Ultralytics checkpoint name to tune from, e.g. `"yolo26n"`.
-        iterations: Number of genetic-algorithm generations.
+        iterations: Number of Optuna trials.
         epochs: Epochs per trial — short by design; this is a search, not a final fit.
         fraction: Fraction of the training set per trial, for search speed.
         imgsz: Training image size.
         space: Hyperparameter search space, `{name: (min, max)}`. Defaults to
-            `AUGMENTATION_FOCUSED_SPACE`.
+            `AUGMENTATION_FOCUSED_SPACE` merged with `CUSTOM_AUGMENTATION_PARAM_RANGES`.
 
     Returns:
-        The best hyperparameters found, as a dict (from `best_hyperparameters.yaml`).
+        The best hyperparameters found, as a dict (built-in and custom keys together).
     """
+    import optuna
+
     project = Path(project).resolve()
     configure_ultralytics_mlflow(DETECTION_EXPERIMENT)
-    model = YOLO(f"{model_name}.pt")
-    model.tune(
-        data=str(Path(data_yaml).resolve()),
-        iterations=iterations,
-        epochs=epochs,
-        fraction=fraction,
-        imgsz=imgsz,
-        seed=SEED,
-        freeze=FREEZE_LAYERS,
-        project=str(project),
-        name="tune",
-        exist_ok=True,
-        plots=False,
-        space=space if space is not None else AUGMENTATION_FOCUSED_SPACE,
+    search_space = (
+        space
+        if space is not None
+        else {**AUGMENTATION_FOCUSED_SPACE, **CUSTOM_AUGMENTATION_PARAM_RANGES}
     )
-    return dict(YAML.load(project / "tune" / "best_hyperparameters.yaml"))
+
+    def objective(trial: optuna.Trial) -> float:
+        sampled = {
+            k: (
+                trial.suggest_int(k, int(lo), int(hi))
+                if k == "close_mosaic"
+                else trial.suggest_float(k, lo, hi)
+            )
+            for k, (lo, hi) in search_space.items()
+        }
+        hyperparameters = {
+            k: v for k, v in sampled.items() if k not in CUSTOM_AUGMENTATION_PARAM_RANGES
+        }
+        model = YOLO(f"{model_name}.pt")
+        results = model.train(
+            data=str(Path(data_yaml).resolve()),
+            epochs=epochs,
+            fraction=fraction,
+            imgsz=imgsz,
+            seed=SEED,
+            freeze=FREEZE_LAYERS,
+            project=str(project),
+            name=f"tune-trial{trial.number}",
+            exist_ok=True,
+            plots=False,
+            augmentations=_build_custom_augmentations(sampled),
+            **hyperparameters,
+        )
+        fitness = results.results_dict["metrics/mAP50-95(B)"]
+        # MLFLOW_KEEP_RUN_ACTIVE=True (configure_ultralytics_mlflow) leaves each trial's
+        # run open on purpose (see mlflow_utils.finish_run) — without explicitly closing
+        # it here, the next trial's model.train() call reuses the same still-open run and
+        # MLflow rejects the changed param values ("Not tracking this run"), silently
+        # dropping every trial after the first. Caught by actually running this, not just
+        # reading the code — see docs/adr/0005-....md's "test, don't assume" pattern.
+        finish_run(extra_metrics={"box_map50_95": float(fitness)})
+        return fitness
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=SEED))
+    study.optimize(objective, n_trials=iterations)
+    return dict(study.best_params)
 
 
 def tune_augmentation_parameters(
@@ -534,8 +582,8 @@ def run_size_sweep(
     cheaper than tuning per size, and hyperparameters/augmentation choices usually
     transfer reasonably well across scales of the same architecture:
 
-    1. `tune_hyperparameters` — Ultralytics' native genetic search (lr0 + built-in
-       augmentation magnitudes).
+    1. `tune_hyperparameters` — Optuna TPE search (lr0 + built-in augmentation
+       magnitudes).
     2. `tune_augmentation_parameters` — this project's custom Albumentations parameters
        (color invariance, lighting/contrast), run *under* the hyperparameters (1) found,
        so the augmentation search reflects realistic training conditions.
@@ -543,7 +591,7 @@ def run_size_sweep(
     Args:
         data_dir: Dataset root (contains `images/`, `annotations/`).
         sizes: YOLO26 scale letters to train, e.g. `("n", "s")`.
-        tune_iterations: Genetic-algorithm generations for `tune_hyperparameters`.
+        tune_iterations: Optuna trials for `tune_hyperparameters`.
         tune_epochs: Epochs per hyperparameter-tuning trial.
         tune_fraction: Fraction of the training set per hyperparameter-tuning trial.
         aug_trials: Random draws for `tune_augmentation_parameters`.
