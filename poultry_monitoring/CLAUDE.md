@@ -49,12 +49,13 @@ src/poultry_monitoring/
     coco.py            # ChickenDet COCO parsing (shared: boxes + masks are in the same annotation file)
     dali_pipeline.py   # GPU-accelerated DALI loader (Phase 5)
   augmentation/
-    shared.py           # task-agnostic: lighting/color jitter
-    detection.py         # bbox-aware: mosaic, occlusion-aware crops
-    segmentation.py       # mask-aware: copy-paste
+    shared.py           # task-agnostic: lighting/color jitter (build_domain_transforms)
+    visualize.py         # before/after grids for shared.py's transforms — no torch import
+    detection.py          # bbox-aware: occlusion simulation (CoarseDropout, boxes untouched)
+    segmentation.py        # mask-aware: copy-paste
   detection/
-    yolo.py              # YOLO26 detection train/predict wrappers
-    detr.py              # DETR detection train/predict wrappers
+    yolo.py              # YOLO26: tune/augtune/train/sweep/predict, native ultralytics.YOLO
+    detr.py              # DETR detection train/predict wrappers (secondary/practice track)
   segmentation/
     yolo.py              # YOLO26-seg wrappers
     detr.py              # DETR (panoptic head) or Mask2Former wrappers; SAM stretch goal (see plan.md Future Work)
@@ -113,6 +114,10 @@ uv run python -m poultry_monitoring.detection.yolo augtune --data-dir <dir>     
 uv run python -m poultry_monitoring.detection.yolo train --data-dir <dir>        # fine-tune one size
 uv run python -m poultry_monitoring.detection.yolo sweep --data-dir <dir>         # tune, then train every size in --sizes
 uv run python -m poultry_monitoring.detection.yolo predict --weights <pt> --source <img>  # inference on custom images
+
+# augmentation/visualize.py CLI — pure Albumentations/numpy, no torch import, safe to
+# run alongside a live GPU training job (unlike anything above, which all touch torch)
+uv run python -m poultry_monitoring.augmentation.visualize --image <img> --label <txt>  # before/after grid + boxes
 ```
 
 Export/benchmark CLI entry points don't exist yet — Phase 6 in `plan.md`. Update this section as they're built; keep `README.md`'s usage examples in sync too.
