@@ -159,14 +159,14 @@ This table reflects the state as of the last update — [`plan.md`](plan.md) Pha
 
 ### Sample Predictions
 
-Two images from the **test split** — never used for training, tuning, or any validation-based decision — run through `yolo26n`'s final checkpoint (`conf=0.36`, CPU inference). Ground truth alongside each prediction, same images:
+Two images from the **test split** — never used for training, tuning, or any validation-based decision — run through `yolo26n`'s final checkpoint (`conf=0.36`, CPU inference). Ground truth alongside each prediction, same images. Boxes only, no per-instance labels — with ~50 birds in frame, a "Chicken" tag on every box is noise, not signal, for a single-class dataset:
 
 | Ground truth | Prediction |
 |---|---|
 | ![Ground truth example 1: dense overhead flock, annotated boxes](docs/images/test_ground_truth_1.jpg) | ![Prediction example 1: dense overhead flock with detection boxes](docs/images/test_prediction_1.jpg) |
 | ![Ground truth example 2: dense overhead flock, annotated boxes](docs/images/test_ground_truth_2.jpg) | ![Prediction example 2: dense overhead flock with detection boxes](docs/images/test_prediction_2.jpg) |
 
-56 ground-truth birds vs. 60 predicted in the first image, 42 vs. 44 in the second — close counts, and the extra predictions are mostly genuine partial birds at the frame edge that the model still caught. Confidence is mostly 0.8+ even in tightly overlapping clusters and against low-contrast litter. The overlapping labels in the densest clusters are the scene, not a rendering artifact — this is genuinely what "~23 birds/image, up to 50+" looks like at full resolution.
+56 ground-truth birds vs. 60 predicted in the first image, 42 vs. 44 in the second — close counts, and the extra predictions are mostly genuine partial birds at the frame edge that the model still caught. This is genuinely what "~23 birds/image, up to 50+" looks like at full resolution — the box density is the scene, not a rendering artifact.
 
 ## Key Findings
 
