@@ -7,10 +7,10 @@ Legend: 🔲 not started · 🟡 in progress · ✅ done · ⏭️ stretch/defer
 ## Phase 0 — Setup
 
 - ✅ Download ChickenVerse (ChickenDet split) from Zenodo; verify COCO annotation loading (boxes + masks) for train/val/test splits
-- 🔲 Scaffold `src/poultry_monitoring/` package (see `CLAUDE.md` § Package Layout)
+- ✅ Scaffold `src/poultry_monitoring/` package (see `CLAUDE.md` § Package Layout) — `data/`, `augmentation/`, `detection/`, `mlflow_utils.py` all built out in Phase 2 below
 - ✅ `pyproject.toml` with `torch`/`torchvision` pinned to a CUDA wheel index, `ultralytics`, `transformers`, `mlflow`, dev deps (`ruff`, `pytest`, `jupyter`, `ipykernel`, `torchinfo`)
 - ✅ Verify `torch.cuda.is_available()` is `True` in the local venv — confirmed against the local RTX 2060 SUPER (see constitution Principle IX)
-- 🟡 `.gitignore` done; MLflow SQLite tracking store not yet wired up (no `mlflow_utils.py`, no runs logged yet)
+- ✅ `.gitignore` done; MLflow SQLite tracking store wired up (`mlflow_utils.py`, native Ultralytics integration) and in active use — see Phase 2
 
 ## Phase 1 — Exploration & Learning (notebooks)
 
@@ -24,9 +24,9 @@ Per constitution Principle II: each new capability starts as a notebook — on *
 - 🔲 Notebook: sanity-check DALI availability/behavior as an early signal, even though the real DALI work happens locally (Phase 5)
 - 🟡 Capture what was learned from each notebook (API quirks, what worked/didn't) — done for notebooks 01/02, pending for the rest — this is the design input for Phases 2-6, per constitution Principle II
 
-## Phase 2 — YOLO26 Detection, Productionized (current priority)
+## Phase 2 — YOLO26 Detection, Productionized (wrapping up)
 
-Per the Project Intent correction in `CLAUDE.md`: YOLO26 is the model actually being productionized here — this phase is the immediate next work, not gated on a DETR baseline. Scope, being scoped with the user:
+Per the Project Intent correction in `CLAUDE.md`: YOLO26 is the model actually being productionized here, not gated on a DETR baseline. `yolo26n` is done and beats ChickenVerse's published baseline; `yolo26s` and a couple of optional follow-ups (below) remain, but Phase 3 (segmentation) can start without waiting on them.
 
 - ✅ Scaffold `src/poultry_monitoring/` (`data/coco.py` COCO parsing; `mlflow_utils.py` native MLflow integration wrapper; `augmentation/shared.py` custom Albumentations transforms; `detection/yolo.py` train/tune/augtune/sweep/predict CLI) — see `docs/adr/` for the non-obvious design calls
 - ✅ Hyperparameter tuning (`tune_hyperparameters`, Ultralytics' native `model.tune()`) and custom augmentation search (`tune_augmentation_parameters`, in-process random search) both wired into `run_size_sweep`, logged to `poultry_detection` via the native MLflow integration
@@ -111,4 +111,4 @@ Per the Albumentations-vs-DALI decision (constitution § Technology Stack): only
 
 ## Status
 
-🟡 Phase 0 mostly done (env verified GPU-capable locally; package scaffold + MLflow wiring still open). Phase 1's YOLO26 baseline notebook is done with a strong quick-sanity result (box mAP50 = 0.953). **Current priority: Phase 2** — productionize YOLO26 (hyperparameter tuning, a size sweep, MLflow-tracked runs). DETR is a secondary/practice track (⏭️ throughout Phases 2-3), not a gate on this work — see `CLAUDE.md` § Project Intent.
+✅ Phase 0 done. ✅ Phase 1's YOLO26 baseline notebook done. 🟡 **Phase 2 (YOLO26 detection) is wrapping up** — `yolo26n` is fully tuned, augmented, and progressively unfrozen, beating ChickenVerse's own published baseline on both mAP50 and mAP50-95 (see README § Results); `yolo26s` is trained and close but hasn't had the unfreeze treatment yet. A `multi_scale` hyperparameter re-tune is the one experiment still running; a `yolo26s` unfreeze pass and the deliberate `flipud` check are queued, optional follow-ups, not blockers. Four ADRs and a "Key Findings" section in the README capture the non-obvious calls and the negative results (test-time preprocessing, `copy_paste_mode`) along the way. **Next up: Phase 3** — segmentation baseline, same tune/train/MLflow treatment as detection. DETR remains a secondary/practice track (⏭️ throughout Phases 2-3), not a gate on this work — see `CLAUDE.md` § Project Intent.

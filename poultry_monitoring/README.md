@@ -168,13 +168,26 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 
 ## Portfolio Scope & Objectives
 
-This project is scoped to demonstrate:
+### Detection track — done
 
-1. Fine-tuning and hyperparameter-optimizing a CNN-based detector (YOLO26) to a genuinely strong result on a dense, occluded dataset — the primary deliverable
-2. A domain-specific augmentation strategy suited to dense, small, occluded objects (Albumentations, searched alongside hyperparameters)
-3. Hands-on practice with a transformer-based detector (DETR) as a secondary track — compared fairly against YOLO26 if/when both are far enough along, not a gating requirement
-4. Building and benchmarking a GPU-accelerated data loading pipeline (DALI vs. a standard loader), if profiling shows it's warranted
-5. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets
+1. **Fine-tuned and hyperparameter-optimized a CNN-based detector (YOLO26)** to a genuinely strong result on a dense, occluded dataset: `yolo26n` beats ChickenVerse's own published baseline on both mAP50 and mAP50-95 after a built-in hyperparameter search, a custom-augmentation random search, and progressive unfreezing — see [Results](#results).
+2. **Built a domain-specific augmentation strategy** for dense, small, occluded objects: Albumentations-based color-invariance, lighting, and occlusion-simulation transforms, searched alongside Ultralytics' own hyperparameters, with a bounding-box-aware visualization CLI to eyeball the effect before committing to a search.
+3. **Ran and documented negative results, not just wins**: test-time preprocessing and `copy_paste_mode` A/B both came back flat-or-negative — kept and written up (ADR + README [Key Findings](#key-findings)) instead of quietly dropped, because knowing what *doesn't* help is part of the actual engineering record.
+
+### Production practices demonstrated along the way
+
+- **Experiment tracking**: every tuning/training run logged to MLflow (params, per-epoch metrics, final val metrics, artifacts) — see [`CLAUDE.md`](CLAUDE.md) § MLflow Conventions for the schema.
+- **Decision records**: 4 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner) rather than just asserting a conclusion.
+- **Exploratory-then-productionized workflow**: notebooks establish that an approach works; `src/poultry_monitoring/` is the redesigned, tested, CLI-driven version — not a line-for-line port (constitution Principle II).
+- **Test coverage scoped deliberately**: `pytest` smoke tests cover deterministic pipeline code (COCO parsing, augmentation shapes/behavior, hyperparameter routing) — not training convergence, which isn't a unit-testable property (constitution Principle VIII).
+- **Governance sized to the project**: `constitution.md` + `plan.md` + `CLAUDE.md` — heavier than a single README, lighter than full spec-kit — see [Project Docs](#project-docs).
+
+### Beyond detection — planned, not started
+
+4. Instance segmentation on the same dataset (YOLO26-seg), same tune/train/MLflow treatment as detection — Phase 3 in [`plan.md`](plan.md).
+5. Hands-on practice with a transformer-based detector (DETR) as a secondary track — compared fairly against YOLO26 if/when both are far enough along, not a gating requirement.
+6. A GPU-accelerated data loading pipeline (DALI vs. a standard loader), if profiling shows it's warranted.
+7. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets.
 
 ## Project Docs
 
