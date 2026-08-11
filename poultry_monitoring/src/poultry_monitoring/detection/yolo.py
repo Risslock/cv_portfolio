@@ -158,33 +158,15 @@ def tune_hyperparameters(
     imgsz: int = 640,
     space: dict | None = None,
 ) -> dict:
-    """Search YOLO26 hyperparameters with Optuna's TPE sampler.
+    """Search YOLO26 hyperparameters (built-in + custom Albumentations, one joint pass).
 
-    Runs `iterations` independent, in-process trials (fresh `model.train()` call each,
-    `epochs` epochs on `fraction` of the data), each its own MLflow run in
-    `DETECTION_EXPERIMENT` (Ultralytics' native integration — `mlflow_utils.py`).
-
-    Not Ultralytics' native `model.tune()` — see
-    docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md: its mutation is
-    multiplicative from the current population, so a parameter starting at (or
-    converging to) a fixed value can never be meaningfully explored across a wide range.
-    Optuna's default `TPESampler` draws independently across the *full* given range for
-    its startup trials (pure random, `n_startup_trials=10` by default) before switching
-    to model-guided sampling — genuinely spans `space`, not just nudges around a start.
-    Ray Tune (a from-scratch-random alternative) was considered first but doesn't ship
-    Windows wheels for Python 3.13 in this project's environment (see the ADR).
-
-    Covers this project's own Albumentations transforms too by default (`space` merges
-    `AUGMENTATION_FOCUSED_SPACE` and `CUSTOM_AUGMENTATION_PARAM_RANGES`) — a genuine joint
-    search, not the two-pass split `tune_augmentation_parameters` needed when the only
-    available mechanism was `model.tune()`'s subprocess-per-trial execution (ADR 0001).
-    Running in-process here means a plain `augmentations=` kwarg on `model.train()` just
-    works, same as `train()` itself. `tune_augmentation_parameters` still exists for a
-    genuinely different strategy — sequential/coordinate search (fix hyperparameters,
-    then search augmentation under them) is cheaper per pass and a legitimate choice, not
-    strictly obsoleted by joint search; the two aren't answering the same question, and
-    `run_size_sweep` still runs both in sequence today (worth a fresh look once this
-    joint mode has real search results to compare against — not decided here).
+    Runs `iterations` independent, in-process trials with Optuna's TPE sampler, each
+    `epochs` epochs on `fraction`
+    of the data, its own MLflow run in `DETECTION_EXPERIMENT`. Not Ultralytics' native
+    `model.tune()` — see docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md.
+    See `tune_augmentation_parameters` for a sequential-search alternative, and
+    docs/adr/0001-custom-augmentation-search-separate-from-tuner.md for why that one
+    still runs separately.
 
     Args:
         data_yaml: Path to the dataset YAML (`prepare_data`'s return value).
@@ -238,12 +220,7 @@ def tune_hyperparameters(
             **hyperparameters,
         )
         fitness = results.results_dict["metrics/mAP50-95(B)"]
-        # MLFLOW_KEEP_RUN_ACTIVE=True (configure_ultralytics_mlflow) leaves each trial's
-        # run open on purpose (see mlflow_utils.finish_run) — without explicitly closing
-        # it here, the next trial's model.train() call reuses the same still-open run and
-        # MLflow rejects the changed param values ("Not tracking this run"), silently
-        # dropping every trial after the first. Caught by actually running this, not just
-        # reading the code — see docs/adr/0005-....md's "test, don't assume" pattern.
+        # Close this trial's run — MLFLOW_KEEP_RUN_ACTIVE leaves it open otherwise.
         finish_run(extra_metrics={"box_map50_95": float(fitness)})
         return fitness
 

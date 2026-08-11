@@ -43,16 +43,10 @@ AUTOCONTRAST_CUTOFF_RANGE = (0.0, 10.0)
 class _RandomCutoffAutoContrast(A.AutoContrast):
     """`AutoContrast` with a fresh, randomly sampled `cutoff` each time it's applied.
 
-    Albumentations' own `AutoContrast.apply()` reads `self.cutoff` directly rather than
-    threading it through `get_params()`'s params dict, so `get_params()` mutates
-    `self.cutoff` as a side effect instead of returning it — the standard `apply()`
-    inherited from `AutoContrast` then picks up the fresh value on the next call.
-
-    Draws from `self.py_random` (Albumentations' own per-transform seeded RNG, reset by
-    `set_random_seed`/`Compose`'s pipeline seed), not the bare `random` module — using
-    the latter silently broke seeded reproducibility (`generate_augmented_samples`'
-    `seed=` argument had no effect on this transform's draws), caught by
-    `test_seed_gives_reproducible_draws` once the full suite finally ran again.
+    `AutoContrast.apply()` reads `self.cutoff` directly rather than threading it through
+    `get_params()`'s params dict, so `get_params()` mutates `self.cutoff` as a side effect
+    instead of returning it. Draws from `self.py_random` (Albumentations' seeded
+    per-transform RNG), not the bare `random` module, so `seed=` reproducibility holds.
     """
 
     def __init__(
