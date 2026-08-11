@@ -175,7 +175,7 @@ All numbers are validation-split metrics from an explicit `model.val()` pass aft
 |---|---|---|
 | Epochs | ~94–121 (initial, patience-based) + 3×30 (progressive unfreezing) | 20 (fixed) |
 | Patience | 15 (initial), 3 (unfreeze stages) | 10 |
-| Layer freezing | Progressive: 3 stages, `freeze` 10→5→0, `lr0` 5e-4→1e-4→2e-5 | None apparent in their training notebook — a single `model.train()` call per model variant |
+| Layer freezing | Progressive: 3 stages, `freeze` 10→5→0, `lr0` 5e-4→1e-4→2e-5 | All layers unfrezeed — a single `model.train()` call per model variant |
 | Hyperparameter search | Ultralytics genetic tuner (20 iterations) + custom random search (8 trials) | Fixed, not searched |
 | Custom augmentation | Color invariance, lighting/contrast, randomized autocontrast, occlusion simulation (Albumentations) | Ultralytics' stock augmentation, unmodified |
 | Batch size | Ultralytics auto-batch | 16 (fixed) |
