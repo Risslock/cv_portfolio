@@ -890,7 +890,7 @@ def main() -> None:
             epochs=args.epochs,
             fraction=args.fraction,
         )
-        print(best)
+        print(json.dumps(best))
     elif args.command == "augtune":
         data_yaml = prepare_data(data_dir, force_relabel=args.force_relabel)
         best = tune_augmentation_parameters(
