@@ -8,9 +8,11 @@ mosaic/close_mosaic behavior) this module builds on.
 """
 
 import argparse
+import gc
 import json
 import random
 import shutil
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,6 +182,7 @@ def tune_hyperparameters(
     """
     import mlflow
     import optuna
+    import torch
 
     project = Path(project).resolve()
     configure_ultralytics_mlflow(DETECTION_EXPERIMENT)
@@ -220,9 +223,14 @@ def tune_hyperparameters(
             fitness = results.results_dict["metrics/mAP50-95(B)"]
             finish_run(extra_metrics={"box_map50_95": float(fitness)})
         except Exception:
+            traceback.print_exc()
             if mlflow.active_run() is not None:
                 mlflow.end_run(status="FAILED")
-            return 0.0
+            fitness = 0.0
+        finally:
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
         return fitness
 
     study = optuna.create_study(
