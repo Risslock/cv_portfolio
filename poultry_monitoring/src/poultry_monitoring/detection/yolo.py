@@ -8,11 +8,12 @@ mosaic/close_mosaic behavior) this module builds on.
 """
 
 import argparse
-import gc
 import json
 import random
+import re
 import shutil
-import traceback
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -158,11 +159,12 @@ def tune_hyperparameters(
 ) -> dict:
     """Search YOLO26 hyperparameters (built-in + custom Albumentations, one joint pass).
 
-    Runs `iterations` independent, in-process trials with Optuna's TPE sampler, each
-    `epochs` epochs on `fraction` of the data, its own MLflow run in
-    `DETECTION_EXPERIMENT`. Not Ultralytics' native
-    `model.tune()` — see docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md.
-    See `tune_augmentation_parameters` for a sequential-search alternative, and
+    Runs `iterations` trials with Optuna's TPE sampler, each `epochs` epochs on
+    `fraction` of the data. Not Ultralytics' native `model.tune()` — see
+    docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md. Each trial runs as
+    its own subprocess (the `train` CLI, `--hyperparameters-json`) rather than in-process
+    — see docs/adr/0007-subprocess-per-optuna-trial.md. See `tune_augmentation_parameters`
+    for a sequential-search alternative, and
     docs/adr/0001-custom-augmentation-search-separate-from-tuner.md for why that one
     still runs separately.
 
@@ -180,12 +182,9 @@ def tune_hyperparameters(
     Returns:
         The best hyperparameters found, as a dict (built-in and custom keys together).
     """
-    import mlflow
     import optuna
-    import torch
 
-    project = Path(project).resolve()
-    configure_ultralytics_mlflow(DETECTION_EXPERIMENT)
+    data_dir = Path(data_yaml).resolve().parent
     search_space = (
         space
         if space is not None
@@ -201,37 +200,36 @@ def tune_hyperparameters(
             )
             for k, (lo, hi) in search_space.items()
         }
-        hyperparameters = {
-            k: v for k, v in sampled.items() if k not in CUSTOM_AUGMENTATION_PARAM_RANGES
-        }
-        model = YOLO(f"{model_name}.pt")
-        try:
-            results = model.train(
-                data=str(Path(data_yaml).resolve()),
-                epochs=epochs,
-                fraction=fraction,
-                imgsz=imgsz,
-                seed=SEED,
-                freeze=FREEZE_LAYERS,
-                project=str(project),
-                name=f"tune-trial{trial.number}",
-                exist_ok=True,
-                plots=False,
-                augmentations=_build_custom_augmentations(sampled),
-                **hyperparameters,
-            )
-            fitness = results.results_dict["metrics/mAP50-95(B)"]
-            finish_run(extra_metrics={"box_map50_95": float(fitness)})
-        except Exception:
-            traceback.print_exc()
-            if mlflow.active_run() is not None:
-                mlflow.end_run(status="FAILED")
-            fitness = 0.0
-        finally:
-            del model
-            gc.collect()
-            torch.cuda.empty_cache()
-        return fitness
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "poultry_monitoring.detection.yolo",
+                "train",
+                "--data-dir",
+                str(data_dir),
+                "--model-name",
+                model_name,
+                "--variant",
+                f"tune-trial{trial.number}",
+                "--epochs",
+                str(epochs),
+                "--patience",
+                str(epochs),
+                "--fraction",
+                str(fraction),
+                "--imgsz",
+                str(imgsz),
+                "--hyperparameters-json",
+                json.dumps(sampled),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        match = re.search(r"box_map50_95=([0-9.eE+-]+)", result.stdout)
+        if result.returncode != 0 or match is None:
+            return 0.0
+        return float(match.group(1))
 
     study = optuna.create_study(
         study_name=f"tune-{model_name}",
@@ -814,6 +812,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--epochs", type=int, default=100)
     train_parser.add_argument("--patience", type=int, default=10)
     train_parser.add_argument("--fraction", type=float, default=1.0)
+    train_parser.add_argument("--imgsz", type=int, default=640)
     train_parser.add_argument(
         "--resume-from", type=Path, default=None, help="Resume an interrupted weights/last.pt."
     )
@@ -913,6 +912,7 @@ def main() -> None:
             epochs=args.epochs,
             patience=args.patience,
             fraction=args.fraction,
+            imgsz=args.imgsz,
             resume_from=args.resume_from,
         )
         print(outcome)
