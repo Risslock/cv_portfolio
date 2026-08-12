@@ -33,11 +33,9 @@ PARAM_RANGES = {
     "contrast_limit": (0.1, 0.4),
 }
 
-# Fixed sampling range for _RandomCutoffAutoContrast, not searched — see the comment on
-# PARAM_RANGES above for why a single tuned cutoff value undersold what this transform
-# is for. 10% is a meaningfully stronger clip than the 1.2% the search converged on,
-# without being so aggressive it starts discarding real signal.
-AUTOCONTRAST_CUTOFF_RANGE = (0.0, 10.0)
+# Fixed sampling range for _RandomCutoffAutoContrast, not searched — see PARAM_RANGES
+# above for why a single tuned cutoff value undersold what this transform is for.
+AUTOCONTRAST_CUTOFF_RANGE = (0.0, 20.0)
 
 
 class _RandomCutoffAutoContrast(A.AutoContrast):
