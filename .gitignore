@@ -233,6 +233,7 @@ outputs/
 logs/
 checkpoints/
 models/
+runs/          # Ultralytics' default train/val/predict output dir (project/name not set)
 
 # Data directories
 data/

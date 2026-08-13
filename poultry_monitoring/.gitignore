@@ -2,17 +2,33 @@
 .venv/
 uv.lock.bak
 
-# Dataset cache (ChickenVerse — large, re-downloadable, CC BY-NC-SA licensed, don't redistribute via git)
-data/
-!data/.gitkeep
+# Dataset cache (ChickenVerse — large, re-downloadable, CC BY-NC-SA licensed, don't redistribute
+# via git). Anchored to the repo root (`/data/`) — an unanchored `data/` would also match
+# `src/poultry_monitoring/data/`, silently hiding that first-party package from git.
+/data/
+!/data/.gitkeep
+
+# The monorepo root .gitignore also has a generic (unanchored) `data/` rule from its Python
+# template, meant for sibling projects' dataset caches — it would otherwise swallow this
+# first-party package the same way the rule above (now fixed) did. Explicitly un-ignore it.
+!/src/poultry_monitoring/data/
+!/src/poultry_monitoring/data/**
 
 # MLflow
 mlflow.db
 mlruns/
 
+# Optuna
+optuna.db
+
 # Per-run artifacts (weights, plots) — keep the folder, not its contents
 results/*
 !results/.gitkeep
+
+# Ultralytics' default train/val/predict output dir when `project=`/`name=` aren't passed —
+# real runs use project=DATA_DIR/"YOLO" (already under the gitignored data/), this only
+# catches ad hoc/one-off `model.val()`/`model.predict()` calls that skip that.
+runs/
 
 # Trained/exported model weights — too large for git, regenerate via training/export scripts
 *.pt
