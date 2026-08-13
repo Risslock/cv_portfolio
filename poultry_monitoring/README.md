@@ -73,11 +73,11 @@ flowchart LR
     A["ChickenVerse<br/>COCO annotations<br/>(boxes + masks)"] --> B["data/coco.py<br/>COCO to YOLO labels + data.yaml"]
     B --> C["augmentation/shared.py<br/>color invariance, lighting"]
     B --> D["augmentation/detection.py<br/>occlusion (CoarseDropout)"]
-    C --> E["detection/yolo.py"]
+    C --> E["detection/yolo.py<br/>train() / predict()"]
     D --> E
-    E -->|tune| F["model.tune()<br/>built-in hyperparameter search"]
-    E -->|augtune| G["tune_augmentation_parameters()<br/>custom augmentation random search"]
-    F --> H["train() / unfreeze()<br/>YOLO26 fine-tuning +<br/>progressive unfreezing"]
+    E -->|tune| F["tuning.tune_hyperparameters()<br/>Optuna hyperparameter search"]
+    E -->|augtune| G["tuning.tune_augmentation_parameters()<br/>custom augmentation random search"]
+    F --> H["train() / tuning.progressive_unfreeze_train()<br/>YOLO26 fine-tuning +<br/>progressive unfreezing"]
     G --> H
     H --> I[("MLflow<br/>poultry_detection")]
     H --> J["best.pt checkpoint"]
@@ -98,7 +98,7 @@ Everything below runs through `detection/yolo.py`'s CLI (`--data-dir` points at 
 root containing `images/` and `annotations/`):
 
 ```bash
-# Hyperparameter search on yolo26n (Ultralytics' native genetic-algorithm tuner)
+# Hyperparameter search on yolo26n (in-process Optuna, not Ultralytics' native tuner — ADR 0005)
 uv run python -m poultry_monitoring.detection.yolo tune --data-dir data/ChickenDet \
     --iterations 20 --epochs 15 --fraction 0.3
 
@@ -113,7 +113,7 @@ uv run python -m poultry_monitoring.detection.yolo train --data-dir data/Chicken
 
 # Progressive-unfreezing refinement on top of an already-trained checkpoint: three stages of
 # decreasing freeze (10 -> 5 -> 0) and decreasing lr0 (5e-4 -> 1e-4 -> 2e-5), each continuing
-# from the previous stage's best weights — see DEFAULT_UNFREEZE_STAGES in detection/yolo.py
+# from the previous stage's best weights — see DEFAULT_UNFREEZE_STAGES in detection/tuning.py
 uv run python -m poultry_monitoring.detection.yolo unfreeze --data-dir data/ChickenDet \
     --model-name yolo26n --initial-weights data/ChickenDet/YOLO/yolo26n-tuned/weights/best.pt \
     --hyperparameters-json '{"lr0": 0.01, "fliplr": 0.5, "p_lighting": 0.12}'
@@ -201,13 +201,14 @@ Two images from the **test split** — never used for training, tuning, or any v
 Learnings worth keeping visible here, not just buried in `plan.md`'s working history:
 
 - **Ultralytics' genetic tuner doesn't meaningfully explore from a fixed starting point** ([ADR 0005](docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md)) — caught mid-run: a follow-up `multi_scale` search (range `0.0`–`0.3`) never sampled anything past `~1e-4`. Traced to the tuner's source: mutation is purely *multiplicative* from the current population, and when that population has no real diversity yet (true for every parameter on iteration 2, since iteration 1 is always unmutated defaults), the crossover step's fallback only injects a tiny random nudge — never a meaningful jump across a wide range. The uncomfortable implication: the *original* built-in-augmentation search likely had the same problem — its winning "iteration 1" was literally unmutated defaults, never beaten across 20 iterations. **Fixed**: `tune_hyperparameters` now runs Optuna's TPE sampler instead, unified with the custom Albumentations search into one joint pass.
-- **A "successful" 40-trial search turned out to be silent garbage** ([ADR 0007](docs/adr/0007-subprocess-per-optuna-trial.md)) — exit code 0, a printed "best" result, all 40 trials nominally complete. In reality, trials 3-39 each failed in ~1.3 seconds (far too fast to train anything) and were silently scored `0.0` by an overly broad exception handler with no logging. Root cause, found through live process/memory monitoring rather than guessing: running 40 real training calls in one long-lived Python process orphans DataLoader **worker processes** (Windows `spawn`-based multiprocessing) that accumulate across trials and exhaust system RAM — not GPU VRAM, which a first fix attempt (`torch.cuda.empty_cache()`) wrongly targeted. `workers=0` confirmed the mechanism by eliminating it entirely (no leak, but ~5-6x slower); `workers=4` still leaked, just slower. **Fixed** by running each trial as its own subprocess — the same isolation that protected the *original* `model.tune()` search from ever hitting this, now paired with genuine range coverage instead of the tuner's fixed-start problem above.
+- **A "successful" 40-trial search turned out to be silent garbage** ([ADR 0007](docs/adr/0007-subprocess-per-optuna-trial.md), later reverted by [ADR 0009](docs/adr/0009-revert-to-in-process-optuna-trials.md)) — exit code 0, a printed "best" result, all 40 trials nominally complete. In reality, trials 3-39 each failed in ~1.3 seconds (far too fast to train anything) and were silently scored `0.0` by an overly broad exception handler with no logging. Root cause, found through live process/memory monitoring rather than guessing: running 40 real training calls in one long-lived Python process orphans DataLoader **worker processes** (Windows `spawn`-based multiprocessing) that accumulate across trials and exhaust system RAM — not GPU VRAM, which a first fix attempt (`torch.cuda.empty_cache()`) wrongly targeted. `workers=0` confirmed the mechanism by eliminating it entirely (no leak, but ~5-6x slower); `workers=4` still leaked, just slower. **Fixed** at the time by running each trial as its own subprocess; **later reverted** in favor of a plain in-process Optuna objective for a simpler, easier-to-read main script, deliberately re-accepting this risk rather than re-solving it.
 - **Test-time preprocessing doesn't help** ([ADR 0004](docs/adr/0004-no-test-time-preprocessing.md)) — autocontrast/CLAHE/histogram-equalization applied only at inference (no retraining) on a trained checkpoint were flat-to-negative: autocontrast was a wash (≤0.001 on every metric — the model already saw similarly mild autocontrast during training), while CLAHE and histogram-equalization measurably hurt (−0.013 to −0.014 mAP50-95) by creating a train/inference distribution mismatch instead of correcting one.
 - **`close_mosaic` must scale with stage length, not get inherited from a different run's tune result** — reusing `close_mosaic=10` (sized for a 300-epoch run) unchanged on 30-epoch progressive-unfreezing stages disabled mosaic for the last third of each stage, visible below as a sharp train-loss drop plus a transient val-loss/mAP50-95 dip right at epoch 20 (mosaic switches off at `epoch == epochs - close_mosaic`). Fixed with two rules of thumb: `epochs >> close_mosaic`, and `patience < close_mosaic` (since Ultralytics' `best.pt` always tracks the best-ever-observed fitness regardless of when training stops, a shorter patience bounds how much of a bad post-transition regime gets trained through before reverting).
 
   ![Training curves for the final progressive-unfreezing stage, showing the mAP50-95 dip and recovery right at the close_mosaic transition (epoch 20 of 30)](docs/images/training_curves_stage2.png)
 - **`AutoContrast`'s cutoff needed to vary per-application, not get tuned to one fixed value** — Albumentations' `RandomBrightnessContrast` auto-symmetrizes a tuned scalar into a fresh `±range` every call, but `AutoContrast.cutoff` doesn't have that built in; the augmentation search had converged it to a single always-identical value. Fixed with a small subclass that resamples `cutoff` from a fixed range each application instead.
 - **`copy_paste_mode` (`"flip"` vs `"mixup"`) is a wash at proxy scale** — every metric within 0.006 between the two; not a meaningful lever for this dataset as tested, despite a real theoretical scale-mismatch risk for `"mixup"` (unmatched cutout/background scale) that didn't clearly show up in the numbers either.
+- **A conservative, hand-curated search space still found a losing config** ([ADR 0008](docs/adr/0008-conservative-hyperparameter-space.md), [ADR 0011](docs/adr/0011-conservative-search-result-not-adopted.md)) — narrowing the search space (down from a near-copy of Ultralytics' own wide `Tuner.space`) didn't guarantee a winner. A real 16-trial run's best trial, applied at full scale, underperformed the pre-session baseline in *both* cold-start (`Δ −0.0286` mAP50-95) and warm-start/continued-fine-tuning (`Δ −0.0169`) regimes — confirmed via matched-config re-runs, not just a one-off. The cold-start run's per-epoch curve converged completely normally (no instability); it simply plateaued at a genuinely worse optimum. Not adopted — production stays on the pre-session near-default augmentation config.
 
 ## Portfolio Scope & Objectives
 

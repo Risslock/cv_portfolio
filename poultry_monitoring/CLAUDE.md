@@ -46,7 +46,7 @@ Per constitution Principle II, exploratory notebooks (`notebooks/`, run on Colab
 ```
 src/poultry_monitoring/
   data/
-    coco.py            # ChickenDet COCO parsing (shared: boxes + masks are in the same annotation file)
+    coco.py            # ChickenDet COCO parsing + prepare_data (shared: boxes + masks in one annotation file)
     dali_pipeline.py   # GPU-accelerated DALI loader (Phase 5)
   augmentation/
     shared.py           # task-agnostic: lighting/color jitter (build_domain_transforms)
@@ -54,7 +54,9 @@ src/poultry_monitoring/
     detection.py          # bbox-aware: occlusion simulation (CoarseDropout, boxes untouched)
     segmentation.py        # mask-aware: copy-paste
   detection/
-    yolo.py              # YOLO26: tune/augtune/train/sweep/predict, native ultralytics.YOLO
+    yolo.py              # YOLO26 core: train/predict, TrainOutcome; also owns the unified CLI (imports tuning.py/preprocessing_eval.py locally inside main() — see docs/adr/0010)
+    tuning.py             # multi-run strategies: tune/augtune/unfreeze/sweep, built on yolo.py's train()
+    preprocessing_eval.py  # test-time-only preprocessing comparison harness (ttp CLI) — see docs/adr/0004
     detr.py              # DETR detection train/predict wrappers (secondary/practice track)
   segmentation/
     yolo.py              # YOLO26-seg wrappers

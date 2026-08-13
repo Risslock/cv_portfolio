@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0009](0009-revert-to-in-process-optuna-trials.md) — whose Addendum 2
+notes a later 16-trial in-process run completed with zero crashes, weakening confidence
+in (though not disproving) the root cause diagnosed below.
 
 ## Context
 

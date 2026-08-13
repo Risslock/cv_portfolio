@@ -1,36 +1,30 @@
-"""YOLO26 detection: train/tune wrappers around `ultralytics.YOLO`.
+"""YOLO26 detection core: single-run train/predict wrappers around `ultralytics.YOLO`.
 
-Framework class used natively per constitution Principle I — this module supplies the
+Framework class used natively (constitution Principle I) — this module supplies the
 project-specific glue (data prep, MLflow wiring, the augmentation hook), not a wrapper
-class around YOLO itself. Productionized from `notebooks/02_yolo26_baseline.ipynb`;
-see that notebook's Notes section for the fine-tuning rationale (freeze/lr0 choices,
-mosaic/close_mosaic behavior) this module builds on.
+around YOLO itself. Productionized from `notebooks/02_yolo26_baseline.ipynb`.
+
+Multi-run strategies (hyperparameter/augmentation search, progressive unfreezing, size
+sweeps) live in `detection/tuning.py`; test-time preprocessing comparisons live in
+`detection/preprocessing_eval.py` — both built on `train()` here, and both import core
+pieces (`train`, `SEED`, `CLASS_NAMES`, `CUSTOM_AUGMENTATION_PARAM_RANGES`) from this
+module at their own top level. This module's CLI (`main`, below) still wires up every
+subcommand from all three — `python -m poultry_monitoring.detection.yolo <subcommand>`
+is unchanged — but imports `tuning`/`preprocessing_eval` *inside* `main()`, not at this
+module's top level, specifically to avoid a circular import (see docs/adr/0010-split-
+yolo-py-by-responsibility.md).
 """
 
 import argparse
 import json
-import random
-import re
-import shutil
-import subprocess
-import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
-import numpy as np
-from PIL import Image
 from ultralytics import YOLO
-from ultralytics.utils import YAML
 
 from poultry_monitoring.augmentation import detection as aug_detection
 from poultry_monitoring.augmentation import shared as aug_shared
-from poultry_monitoring.data.coco import (
-    build_data_yaml,
-    convert_coco_to_yolo_labels,
-    fix_iscrowd_field,
-)
+from poultry_monitoring.data.coco import prepare_data
 from poultry_monitoring.mlflow_utils import (
     DETECTION_EXPERIMENT,
     configure_ultralytics_mlflow,
@@ -44,81 +38,26 @@ CLASS_NAMES = {0: "Chicken"}
 # recall (fewer missed birds), higher favors precision (fewer double-counts).
 DEFAULT_CONF_THRESHOLD = 0.36
 DEFAULT_IOU_THRESHOLD = 0.5
-# Freeze most of the backbone, fine-tune the neck/head — Ultralytics' own guidance for
-# fine-tuning a pretrained checkpoint on a small dataset (see notebook 02's Notes).
-# Not part of `model.tune()`'s search space (a structural choice, not a continuous
-# hyperparameter), so it's applied as a fixed kwarg everywhere below.
+# Freeze most of the backbone, fine-tune the neck/head — standard practice for
+# fine-tuning a pretrained checkpoint on a small dataset. Fixed everywhere below, not
+# searched.
 FREEZE_LAYERS = 10
 
-# Every custom Albumentations parameter across both augmentation modules — shared.py
-# (image-only) and detection.py (bbox-aware, e.g. occlusion). Combined once here so
-# train()/tune_augmentation_parameters() have one place to check "is this key a custom
-# augmentation param, or a real YOLO training argument".
+# Every custom Albumentations parameter across shared.py/detection.py, combined once so
+# train() knows which hyperparameter keys are custom augmentation params vs. real YOLO
+# training arguments.
 CUSTOM_AUGMENTATION_PARAM_RANGES = {**aug_shared.PARAM_RANGES, **aug_detection.PARAM_RANGES}
-
-# Focused on augmentation + lr0 rather than Ultralytics' full default space (also sweeps
-# momentum/weight_decay/warmup/loss weights — not this project's current focus). Passed
-# to Optuna as `{name: (low, high)}`, so every built-in augmentation hyperparameter is
-# listed explicitly. Excludes this project's own Albumentations parameters on purpose —
-# see docs/adr/0001-custom-augmentation-search-separate-from-tuner.md.
-AUGMENTATION_FOCUSED_SPACE = {
-    "lr0": (1e-5, 1e-2),
-    "hsv_h": (0.0, 0.1),
-    "hsv_s": (0.0, 0.9),
-    "hsv_v": (0.0, 0.9),
-    "degrees": (0.0, 45.0),
-    "translate": (0.0, 0.5),
-    "scale": (0.0, 0.95),
-    "shear": (0.0, 10.0),
-    "perspective": (0.0, 0.001),
-    "flipud": (0.0, 1.0),
-    "fliplr": (0.0, 1.0),
-    "bgr": (0.0, 1.0),
-    "mosaic": (0.0, 1.0),
-    "mixup": (0.0, 1.0),
-    "cutmix": (0.0, 1.0),
-    "copy_paste": (0.0, 1.0),
-    "close_mosaic": (0.0, 3.0),
-    "multi_scale": (0.0, 0.5),
-}
-
-
-def prepare_data(data_dir: Path, force_relabel: bool = False) -> Path:
-    """Fix `iscrowd`, convert COCO to YOLO labels (with segments), and write the data YAML.
-
-    Segments are included even though this is the detection task: Ultralytics' native
-    `copy_paste` density augmentation silently no-ops without them (see
-    `data/coco.py`). A `detect`-task model trains on the derived boxes either way.
-
-    Args:
-        data_dir: Dataset root (contains `images/`, `annotations/`).
-        force_relabel: Regenerate `labels/` even if it already exists. Needed the first
-            time this runs against a `labels/` dir a box-only conversion already wrote
-            (e.g. from `notebooks/02_yolo26_baseline.ipynb`) — otherwise the existing
-            box-only labels are kept as-is and `copy_paste` silently has no segments.
-
-    Returns:
-        Path to the written `data.yaml`.
-    """
-    annotations_dir = data_dir / "annotations"
-    for split in ("Train", "Validation", "Test"):
-        fix_iscrowd_field(annotations_dir / f"instances_{split}.json", assume_yes=True)
-    convert_coco_to_yolo_labels(data_dir, annotations_dir, force=force_relabel, use_segments=True)
-    return build_data_yaml(data_dir, CLASS_NAMES, data_dir / "chickendet.yaml")
 
 
 def _augmentation_kwargs_from(hyperparameters: dict) -> dict:
-    """Pull every custom augmentation param out of a hyperparameters dict, if present.
-
-    For logging (`train` tags each with `aug_` and passes them to `finish_run`) — see
-    `_build_custom_augmentations` for turning these into an actual transform list.
+    """Pull just the custom-augmentation entries out of a hyperparameters dict.
 
     Args:
         hyperparameters: A dict that may contain any of
             `CUSTOM_AUGMENTATION_PARAM_RANGES`'s keys.
 
     Returns:
-        Just the custom-augmentation entries of `hyperparameters`.
+        Only the entries that are custom-augmentation keys.
     """
     return {k: v for k, v in hyperparameters.items() if k in CUSTOM_AUGMENTATION_PARAM_RANGES}
 
@@ -127,10 +66,9 @@ def _build_custom_augmentations(hyperparameters: dict) -> list:
     """Build the full custom Albumentations transform list from a hyperparameters dict.
 
     Routes each key to whichever of `augmentation.shared`/`augmentation.detection`
-    actually owns it, then concatenates both builders' output into one list — Ultralytics'
-    own `Albumentations` wrapper checks `contains_spatial` across the whole list and
-    threads bboxes through automatically when any transform needs it (see
-    `augmentation/detection.py`), so no extra plumbing is needed here for that.
+    owns it, then concatenates both builders' output — Ultralytics' own
+    `Albumentations` wrapper threads bboxes through automatically when any transform
+    in the list needs it, so no extra plumbing is needed here.
 
     Args:
         hyperparameters: A dict that may contain any of
@@ -147,157 +85,24 @@ def _build_custom_augmentations(hyperparameters: dict) -> list:
     ) + aug_detection.build_detection_transforms(**detection_kwargs)
 
 
-def tune_hyperparameters(
-    data_yaml: Path,
-    project: Path,
-    model_name: str = "yolo26n",
-    iterations: int = 20,
-    epochs: int = 15,
-    fraction: float = 0.3,
-    imgsz: int = 640,
-    space: dict | None = None,
-) -> dict:
-    """Search YOLO26 hyperparameters (built-in + custom Albumentations, one joint pass).
+def default_close_mosaic(epochs: int, fraction: float = 0.15) -> int:
+    """Calculate the number of final epochs to run with mosaic disabled.
 
-    Runs `iterations` trials with Optuna's TPE sampler, each `epochs` epochs on
-    `fraction` of the data. Not Ultralytics' native `model.tune()` — see
-    docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md. Each trial runs as
-    its own subprocess (the `train` CLI, `--hyperparameters-json`) rather than in-process
-    — see docs/adr/0007-subprocess-per-optuna-trial.md. See `tune_augmentation_parameters`
-    for a sequential-search alternative, and
-    docs/adr/0001-custom-augmentation-search-separate-from-tuner.md for why that one
-    still runs separately.
+    Turning mosaic off for a tail of training lets the model see un-composited images
+    before it's done learning, avoiding the sharp overfitting/train-val gap jumps a
+    fixed epoch count causes on runs of very different lengths (see
+    docs/adr/0008-conservative-hyperparameter-space.md).
 
     Args:
-        data_yaml: Path to the dataset YAML (`prepare_data`'s return value).
-        project: Local save dir for tuning artifacts (`<project>/tune-trial<N>/`).
-        model_name: Ultralytics checkpoint name to tune from, e.g. `"yolo26n"`.
-        iterations: Number of Optuna trials.
-        epochs: Epochs per trial — short by design; this is a search, not a final fit.
-        fraction: Fraction of the training set per trial, for search speed.
-        imgsz: Training image size.
-        space: Hyperparameter search space, `{name: (min, max)}`. Defaults to
-            `AUGMENTATION_FOCUSED_SPACE` merged with `CUSTOM_AUGMENTATION_PARAM_RANGES`.
+        epochs: Training epochs for this specific run/trial.
+        fraction: Proportion of `epochs` to spend with mosaic disabled, once `epochs`
+            clears the 20-epoch floor below.
 
     Returns:
-        The best hyperparameters found, as a dict (built-in and custom keys together).
+        `0` if `epochs < 20` (too short a run for a mosaic-free tail to help), else
+        `max(1, round(epochs * fraction))`.
     """
-    import optuna
-
-    data_dir = Path(data_yaml).resolve().parent
-    search_space = (
-        space
-        if space is not None
-        else {**AUGMENTATION_FOCUSED_SPACE, **CUSTOM_AUGMENTATION_PARAM_RANGES}
-    )
-
-    def objective(trial: optuna.Trial) -> float:
-        sampled = {
-            k: (
-                trial.suggest_int(k, int(lo), int(hi))
-                if k == "close_mosaic"
-                else trial.suggest_float(k, lo, hi)
-            )
-            for k, (lo, hi) in search_space.items()
-        }
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "poultry_monitoring.detection.yolo",
-                "train",
-                "--data-dir",
-                str(data_dir),
-                "--model-name",
-                model_name,
-                "--variant",
-                f"tune-trial{trial.number}",
-                "--epochs",
-                str(epochs),
-                "--patience",
-                str(epochs),
-                "--fraction",
-                str(fraction),
-                "--imgsz",
-                str(imgsz),
-                "--hyperparameters-json",
-                json.dumps(sampled),
-            ],
-            capture_output=True,
-            text=True,
-        )
-        match = re.search(r"box_map50_95=([0-9.eE+-]+)", result.stdout)
-        if result.returncode != 0 or match is None:
-            return 0.0
-        return float(match.group(1))
-
-    study = optuna.create_study(
-        study_name=f"tune-{model_name}",
-        storage=f"sqlite:///{Path('optuna.db').resolve()}",
-        load_if_exists=True,
-        direction="maximize",
-        sampler=optuna.samplers.TPESampler(seed=SEED),
-    )
-    study.optimize(objective, n_trials=iterations)
-    return dict(study.best_params)
-
-
-def tune_augmentation_parameters(
-    data_yaml: Path,
-    project: Path,
-    model_name: str = "yolo26n",
-    n_trials: int = 8,
-    epochs: int = 15,
-    fraction: float = 0.3,
-    hyperparameters: dict | None = None,
-    param_ranges: dict | None = None,
-    seed: int = SEED,
-) -> dict:
-    """Random-search this project's custom Albumentations parameters, in-process.
-
-    Runs `n_trials` random draws over `train` directly, scoring each by validation
-    `box_map50_95`. Separate from `tune_hyperparameters`/`model.tune()`
-    (docs/adr/0001-custom-augmentation-search-separate-from-tuner.md) and random rather
-    than grid (docs/adr/0002-random-search-for-augmentation-parameters.md).
-
-    Args:
-        data_yaml: Path to the dataset YAML.
-        project: Local save dir for trial artifacts.
-        model_name: Ultralytics checkpoint name to search with, e.g. `"yolo26n"`.
-        n_trials: Number of random parameter draws to try.
-        epochs: Epochs per trial — short by design; this is a search.
-        fraction: Fraction of the training set per trial.
-        hyperparameters: Fixed hyperparameters (typically `tune_hyperparameters`'s
-            result) applied to every trial, so the augmentation search happens under
-            realistic conditions rather than untuned defaults.
-        param_ranges: `{name: (min, max)}` to sample from. Defaults to
-            `CUSTOM_AUGMENTATION_PARAM_RANGES` (both `augmentation.shared` and
-            `augmentation.detection`).
-        seed: Seed for the random draws, for a reproducible search.
-
-    Returns:
-        The best-scoring draw, as a `_build_custom_augmentations(...)`-ready dict.
-    """
-    ranges = param_ranges if param_ranges is not None else CUSTOM_AUGMENTATION_PARAM_RANGES
-    rng = random.Random(seed)
-    best_score = None
-    best_choice = {name: rng.uniform(lo, hi) for name, (lo, hi) in ranges.items()}
-    for i in range(n_trials):
-        choice = {name: rng.uniform(lo, hi) for name, (lo, hi) in ranges.items()}
-        outcome = train(
-            data_yaml,
-            project,
-            model_name=model_name,
-            variant=f"augsearch-{i}",
-            hyperparameters={**(hyperparameters or {}), **choice},
-            epochs=epochs,
-            patience=epochs,  # no early stop mid-search — let every trial finish
-            fraction=fraction,
-        )
-        if best_score is None or outcome.box_map50_95 > best_score:
-            best_score = outcome.box_map50_95
-            best_choice = choice
-    return best_choice
+    return 0 if epochs < 20 else max(1, round(epochs * fraction))
 
 
 @dataclass
@@ -335,43 +140,32 @@ def train(
 ) -> TrainOutcome:
     """Fine-tune a YOLO26 checkpoint, validate the best epoch, and log both to MLflow.
 
-    Mirrors notebook 02's established pattern: reload the *best* checkpoint after
-    training (not whatever's left in `model` after the last epoch) and validate that
-    explicitly. Ultralytics' native MLflow integration already logs per-epoch training
-    metrics under its own key names, but not this project's `box_map50`/`box_map50_95`
-    convention (`CLAUDE.md` § MLflow Conventions) — this validation pass supplies those,
-    logged via `mlflow_utils.finish_run`'s `extra_metrics`.
+    Reloads the *best* checkpoint after training (not whatever's left in `model` after
+    the last epoch) and validates that explicitly, logging `box_map50`/`box_map50_95`/
+    `box_precision`/`box_recall` via `mlflow_utils.finish_run` — Ultralytics' own MLflow
+    integration logs per-epoch metrics under different key names, not this project's
+    convention (CLAUDE.md § MLflow Conventions).
 
     Args:
         data_yaml: Path to the dataset YAML.
         project: Local save dir for this run's artifacts.
-        model_name: Ultralytics checkpoint name, e.g. `"yolo26n"`, `"yolo26s"`. Ignored
-            (but still used for MLflow naming) if `weights_path` is given.
-        variant: Short label for this run (e.g. `"tuned"`, `"baseline"`) — becomes
-            part of the MLflow run name via `mlflow_utils.make_run_name`.
-        hyperparameters: Extra `model.train()` kwargs, typically merged output from
-            `tune_hyperparameters` and/or `tune_augmentation_parameters`. Any of
-            `CUSTOM_AUGMENTATION_PARAM_RANGES`'s keys are pulled out and routed into
-            `_build_custom_augmentations` instead of passed to `model.train()` directly
-            — they aren't real YOLO training arguments and `get_cfg()` would reject
-            them. `freeze`/`seed` are always applied regardless (see module-level
-            `FREEZE_LAYERS`/`SEED`). Ignored when `resume_from` is given.
+        model_name: Ultralytics checkpoint name, e.g. `"yolo26n"`. Ignored (but still
+            used for MLflow naming) if `weights_path` is given.
+        variant: Short label for this run (e.g. `"tuned"`) — part of the MLflow run
+            name via `mlflow_utils.make_run_name`.
+        hyperparameters: Extra `model.train()` kwargs. Any `CUSTOM_AUGMENTATION_PARAM_RANGES`
+            key is routed into `_build_custom_augmentations` instead of passed to
+            `model.train()` directly. Ignored when `resume_from` is given.
         epochs: Max training epochs. Ignored when `resume_from` is given.
         patience: Early-stopping patience. Ignored when `resume_from` is given.
         fraction: Fraction of the training set to use. Ignored when `resume_from` is given.
         imgsz: Training image size. Ignored when `resume_from` is given.
-        resume_from: Path to an interrupted run's `weights/last.pt`. If given, resumes
-            that run to completion (Ultralytics reads the rest of the training config
-            from the same directory's `args.yaml`) instead of starting a fresh one.
-            Logs as a new MLflow run — the interrupted run's own entry is left as-is.
-            Takes priority over `weights_path`/`freeze` if both are given.
+        resume_from: Path to an interrupted run's `weights/last.pt` — resumes it to
+            completion instead of starting fresh. Takes priority over `weights_path`/`freeze`.
         weights_path: Start from these weights instead of a stock `f"{model_name}.pt"`
-            pretrained checkpoint — e.g. a previous stage's `best.pt` in
-            `progressive_unfreeze_train`. Unlike `resume_from`, this is a **fresh**
-            `model.train()` call with the args below, not `resume=True` (which would
-            keep the checkpoint's own stored freeze/lr0, defeating the point of a new
-            stage with deliberately different ones).
-        freeze: Override `FREEZE_LAYERS` for this call. See `progressive_unfreeze_train`.
+            checkpoint. Unlike `resume_from`, this is a fresh `model.train()` call, not
+            `resume=True` — see `tuning.progressive_unfreeze_train`.
+        freeze: Override `FREEZE_LAYERS` for this call.
 
     Returns:
         The best checkpoint's path and validation metrics.
@@ -383,6 +177,7 @@ def train(
     train_kwargs = {
         k: v for k, v in hyperparameters.items() if k not in CUSTOM_AUGMENTATION_PARAM_RANGES
     }
+    train_kwargs.setdefault("close_mosaic", default_close_mosaic(epochs))
 
     if resume_from is not None:
         model = YOLO(str(Path(resume_from).resolve()))
@@ -441,174 +236,6 @@ def train(
     )
 
 
-# Default progressive-unfreezing schedule: freeze less, drop lr0, each stage — standard
-# discriminative fine-tuning (ULMFiT-style gradual unfreezing). Forced optimizer and the
-# close_mosaic/patience sizing are both deliberate — see
-# docs/adr/0006-progressive-unfreeze-stage-config.md.
-DEFAULT_UNFREEZE_STAGES = [
-    {
-        "freeze": 10,
-        "lr0": 5e-4,
-        "optimizer": "AdamW",
-        "epochs": 30,
-        "patience": 3,
-        "close_mosaic": 4,
-    },
-    {
-        "freeze": 5,
-        "lr0": 1e-4,
-        "optimizer": "AdamW",
-        "epochs": 30,
-        "patience": 3,
-        "close_mosaic": 4,
-    },
-    {
-        "freeze": 0,
-        "lr0": 2e-5,
-        "optimizer": "AdamW",
-        "epochs": 30,
-        "patience": 3,
-        "close_mosaic": 4,
-    },
-]
-
-
-def progressive_unfreeze_train(
-    data_yaml: Path,
-    project: Path,
-    model_name: str,
-    initial_weights: Path,
-    hyperparameters: dict | None = None,
-    stages: list[dict] | None = None,
-    fraction: float = 1.0,
-) -> list[TrainOutcome]:
-    """Continue fine-tuning `initial_weights` through progressively less-frozen stages.
-
-    Each stage reloads the *previous* stage's best checkpoint (or `initial_weights` for
-    the first) and trains fresh with that stage's own `freeze`/`lr0` via `train`'s
-    `weights_path`/`freeze` — not `resume_from` (`resume=True` would keep the earlier
-    stage's freeze/lr0 from the checkpoint's own stored args, defeating the point).
-
-    Args:
-        data_yaml: Path to the dataset YAML.
-        project: Local save dir for each stage's artifacts.
-        model_name: Ultralytics model name for MLflow naming, e.g. `"yolo26n"`.
-        initial_weights: Starting checkpoint — typically a prior `TrainOutcome.weights_path`.
-        hyperparameters: Fixed hyperparameters (e.g. `tune_augmentation_parameters`'s
-            result) applied to every stage; each stage's own `lr0`/`optimizer` (and
-            `close_mosaic`, if the stage dict has one) override whatever this dict has
-            for those keys specifically.
-        stages: List of `{"freeze", "lr0", "optimizer", "epochs", "patience"}` dicts
-            (`"close_mosaic"` optional — see `DEFAULT_UNFREEZE_STAGES`'s close_mosaic/
-            patience rules-of-thumb), in order. Defaults to `DEFAULT_UNFREEZE_STAGES`.
-        fraction: Fraction of the training set to use, every stage.
-
-    Returns:
-        One `TrainOutcome` per stage, in order (last one is the final result).
-    """
-    stages = stages if stages is not None else DEFAULT_UNFREEZE_STAGES
-    outcomes = []
-    weights = initial_weights
-    for i, stage in enumerate(stages):
-        stage_hyperparameters = {
-            **(hyperparameters or {}),
-            "lr0": stage["lr0"],
-            "optimizer": stage["optimizer"],
-        }
-        if "close_mosaic" in stage:
-            stage_hyperparameters["close_mosaic"] = stage["close_mosaic"]
-        outcome = train(
-            data_yaml,
-            project,
-            model_name=model_name,
-            variant=f"unfreeze-stage{i}",
-            hyperparameters=stage_hyperparameters,
-            epochs=stage["epochs"],
-            patience=stage["patience"],
-            fraction=fraction,
-            weights_path=weights,
-            freeze=stage["freeze"],
-        )
-        outcomes.append(outcome)
-        weights = outcome.weights_path
-    return outcomes
-
-
-def run_size_sweep(
-    data_dir: Path,
-    sizes: tuple[str, ...] = ("n", "s"),
-    tune_iterations: int = 20,
-    tune_epochs: int = 15,
-    tune_fraction: float = 0.3,
-    aug_trials: int = 8,
-    aug_epochs: int = 15,
-    aug_fraction: float = 0.3,
-    train_epochs: int = 100,
-    train_patience: int = 10,
-    train_fraction: float = 1.0,
-    force_relabel: bool = False,
-) -> dict[str, object]:
-    """Tune once on `yolo26n`, then train every size in `sizes` with those hyperparameters.
-
-    Both searches run once on `yolo26n`, then the winning config is applied to every
-    size in `sizes` — one tuning pass, not one per size. `tune_augmentation_parameters`
-    runs *under* `tune_hyperparameters`'s result; some overlap between the two is a
-    known, open question — see docs/adr/0005-genetic-tuner-undersearches-from-a-fixed-start.md
-    § Consequences.
-
-    Args:
-        data_dir: Dataset root (contains `images/`, `annotations/`).
-        sizes: YOLO26 scale letters to train, e.g. `("n", "s")`.
-        tune_iterations: Optuna trials for `tune_hyperparameters`.
-        tune_epochs: Epochs per hyperparameter-tuning trial.
-        tune_fraction: Fraction of the training set per hyperparameter-tuning trial.
-        aug_trials: Random draws for `tune_augmentation_parameters`.
-        aug_epochs: Epochs per augmentation-search trial.
-        aug_fraction: Fraction of the training set per augmentation-search trial.
-        train_epochs: Max epochs for each final size's training run.
-        train_patience: Early-stopping patience for each final size's training run.
-        train_fraction: Fraction of the training set for each final size's training
-            run. Defaults to the full dataset — override for a quick smoke test.
-        force_relabel: See `prepare_data`.
-
-    Returns:
-        Mapping of size letter (e.g. `"n"`) to that size's `TrainOutcome`.
-    """
-    project = data_dir / "YOLO"
-    data_yaml = prepare_data(data_dir, force_relabel=force_relabel)
-    best_hyperparameters = tune_hyperparameters(
-        data_yaml,
-        project,
-        model_name="yolo26n",
-        iterations=tune_iterations,
-        epochs=tune_epochs,
-        fraction=tune_fraction,
-    )
-    best_augmentation = tune_augmentation_parameters(
-        data_yaml,
-        project,
-        model_name="yolo26n",
-        n_trials=aug_trials,
-        epochs=aug_epochs,
-        fraction=aug_fraction,
-        hyperparameters=best_hyperparameters,
-    )
-    combined_hyperparameters = {**best_hyperparameters, **best_augmentation}
-    return {
-        size: train(
-            data_yaml,
-            project,
-            model_name=f"yolo26{size}",
-            variant="tuned",
-            hyperparameters=combined_hyperparameters,
-            epochs=train_epochs,
-            fraction=train_fraction,
-            patience=train_patience,
-        )
-        for size in sizes
-    }
-
-
 def predict(
     weights_path: Path,
     source: Path,
@@ -643,137 +270,22 @@ def predict(
     )
 
 
-def _autocontrast_image(image: np.ndarray, cutoff: float = 1.0) -> np.ndarray:
-    """Per-channel percentile contrast stretch.
+def _load_hyperparameters(json_str: str, file_path: Path | None) -> dict:
+    """Load a `--hyperparameters-json`/`--hyperparameters-file` pair into one dict.
 
-    Same idea as `augmentation/shared.py`'s `AutoContrast`, applied unconditionally here
-    instead of as a probabilistic transform.
-    """
-    result = image.astype(np.float32)
-    for c in range(image.shape[2]):
-        channel = result[:, :, c]
-        low, high = np.percentile(channel, [cutoff, 100 - cutoff])
-        if high > low:
-            result[:, :, c] = np.clip((channel - low) * 255.0 / (high - low), 0, 255)
-    return result.astype(np.uint8)
-
-
-def _clahe_image(image: np.ndarray) -> np.ndarray:
-    """CLAHE on the L channel of LAB.
-
-    Avoids amplifying color-channel noise the way per-channel CLAHE on RGB directly would.
-    """
-    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-
-
-def _histogram_equalize_image(image: np.ndarray) -> np.ndarray:
-    """Global histogram equalization on the Y channel of YCrCb."""
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
-    ycrcb[:, :, 0] = cv2.equalizeHist(ycrcb[:, :, 0])
-    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-
-
-# Test-time-only preprocessing candidates — no retraining involved, see
-# `evaluate_test_time_preprocessing`. Follows up on notebook 02's autocontrast observation.
-TEST_TIME_PREPROCESSORS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
-    "autocontrast": _autocontrast_image,
-    "clahe": _clahe_image,
-    "hist_eq": _histogram_equalize_image,
-}
-
-
-def _write_preprocessed_validation_split(
-    data_dir: Path, dest_dir: Path, preprocess: Callable[[np.ndarray], np.ndarray]
-) -> None:
-    """Write a `preprocess`-transformed copy of `images/Validation` + its labels under `dest_dir`.
-
-    Labels are copied unchanged — none of `TEST_TIME_PREPROCESSORS` are spatial, so boxes
-    don't move. A full copy (not a symlink) because Ultralytics resolves a split's label
-    directory by swapping `images` for `labels` in its *own* path, which wouldn't find the
-    original `labels/Validation` if `dest_dir` used a different split folder name.
-    """
-    src_images, src_labels = data_dir / "images" / "Validation", data_dir / "labels" / "Validation"
-    dst_images, dst_labels = dest_dir / "images" / "Validation", dest_dir / "labels" / "Validation"
-    dst_images.mkdir(parents=True, exist_ok=True)
-    dst_labels.mkdir(parents=True, exist_ok=True)
-
-    for label_path in src_labels.glob("*.txt"):
-        shutil.copy2(label_path, dst_labels / label_path.name)
-    for image_path in src_images.iterdir():
-        if not image_path.is_file():
-            continue
-        processed = preprocess(np.array(Image.open(image_path).convert("RGB")))
-        Image.fromarray(processed).save(dst_images / image_path.name)
-
-
-def evaluate_test_time_preprocessing(
-    data_dir: Path,
-    weights_path: Path,
-    project: Path,
-    preprocessors: dict[str, Callable[[np.ndarray], np.ndarray]] | None = None,
-) -> dict[str, dict[str, float]]:
-    """Compare validation-set metrics of each preprocessed variant against the baseline.
-
-    Each preprocessor runs over every validation image once, unconditionally — no
-    retraining involved, inference/eval only.
+    `file_path` wins when both are given — meant for a file written by `tune`'s
+    `--output`, sidestepping having to shell-quote a JSON blob by hand.
 
     Args:
-        data_dir: ChickenDet root (must already have `chickendet.yaml` from `prepare_data`).
-        weights_path: Trained checkpoint to evaluate (unchanged across every variant).
-        project: Local save dir for `model.val()` artifacts and each variant's image copy.
-        preprocessors: Name -> image-array-in, image-array-out function. Defaults to
-            `TEST_TIME_PREPROCESSORS`.
+        json_str: Raw JSON string, e.g. `args.hyperparameters_json`.
+        file_path: Path to a JSON file, e.g. `args.hyperparameters_file`.
 
     Returns:
-        `{"baseline": {...}, <preprocessor_name>: {...}, ...}`, each value the same
-        `box_map50`/`box_map50_95`/`box_precision`/`box_recall` shape as `TrainOutcome`.
+        The parsed hyperparameters dict.
     """
-    data_dir = Path(data_dir).resolve()
-    project = Path(project).resolve()
-    preprocessors = preprocessors if preprocessors is not None else TEST_TIME_PREPROCESSORS
-    model = YOLO(str(Path(weights_path).resolve()))
-
-    def box_metrics(val_metrics) -> dict[str, float]:
-        return {
-            "box_map50": float(val_metrics.box.map50),
-            "box_map50_95": float(val_metrics.box.map),
-            "box_precision": float(val_metrics.box.mp),
-            "box_recall": float(val_metrics.box.mr),
-        }
-
-    results = {
-        "baseline": box_metrics(
-            model.val(
-                data=str(data_dir / "chickendet.yaml"),
-                project=str(project),
-                name="ttp-baseline",
-                exist_ok=True,
-            )
-        )
-    }
-    for name, preprocess in preprocessors.items():
-        variant_dir = project / "ttp" / name
-        _write_preprocessed_validation_split(data_dir, variant_dir, preprocess)
-        yaml_path = variant_dir / "data.yaml"
-        # `train` key is required by Ultralytics' data-YAML schema but never read for a
-        # val()-only call (only the active split's path is existence-checked) — points at
-        # the same processed folder rather than a real, unused training split.
-        YAML.save(
-            yaml_path,
-            {
-                "path": str(variant_dir),
-                "train": "images/Validation",
-                "val": "images/Validation",
-                "names": CLASS_NAMES,
-            },
-        )
-        results[name] = box_metrics(
-            model.val(data=str(yaml_path), project=str(project), name=f"ttp-{name}", exist_ok=True)
-        )
-    return results
+    if file_path is not None:
+        return json.loads(Path(file_path).read_text())
+    return json.loads(json_str)
 
 
 def _add_dataset_args(subparser: argparse.ArgumentParser) -> None:
@@ -796,6 +308,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     tune_parser.add_argument("--iterations", type=int, default=20)
     tune_parser.add_argument("--epochs", type=int, default=15)
     tune_parser.add_argument("--fraction", type=float, default=0.3)
+    tune_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write the best hyperparameters here as JSON, e.g. for train/unfreeze's "
+        "--hyperparameters-file. Defaults to <project>/best_hyperparameters.json.",
+    )
 
     augtune_parser = subparsers.add_parser(
         "augtune", help="Random-search custom Albumentations parameters on yolo26n."
@@ -822,6 +341,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="{}",
         help="JSON dict of fixed hyperparameters, e.g. a prior tune_hyperparameters result.",
     )
+    train_parser.add_argument(
+        "--hyperparameters-file",
+        type=Path,
+        default=None,
+        help="JSON file of fixed hyperparameters (e.g. tune's --output). Wins over "
+        "--hyperparameters-json if both are given.",
+    )
+    train_parser.add_argument(
+        "--freeze",
+        type=int,
+        default=None,
+        help="Override FREEZE_LAYERS (default 10) — e.g. --freeze 0 to unfreeze the "
+        "whole backbone from the start instead of progressive_unfreeze_train's staged "
+        "approach.",
+    )
 
     unfreeze_parser = subparsers.add_parser(
         "unfreeze", help="Progressive-unfreezing refinement from a trained checkpoint."
@@ -830,10 +364,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     unfreeze_parser.add_argument("--model-name", default="yolo26n")
     unfreeze_parser.add_argument("--initial-weights", type=Path, required=True)
     unfreeze_parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Distinguishes this run's folders/MLflow names, e.g. 'isolated' -> "
+        "unfreeze-isolated-stage0. Default: a random 8-char id, printed at the start.",
+    )
+    unfreeze_parser.add_argument(
         "--hyperparameters-json",
         type=str,
         default="{}",
         help="JSON dict of fixed hyperparameters applied to every stage.",
+    )
+    unfreeze_parser.add_argument(
+        "--hyperparameters-file",
+        type=Path,
+        default=None,
+        help="JSON file of fixed hyperparameters (e.g. tune's --output). Wins over "
+        "--hyperparameters-json if both are given.",
     )
     unfreeze_parser.add_argument("--fraction", type=float, default=1.0)
 
@@ -858,7 +405,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     predict_parser.add_argument("--save-dir", type=Path, default=None)
 
     ttp_parser = subparsers.add_parser(
-        "ttp", help="Compare test-time-only preprocessing (autocontrast/CLAHE/hist-eq) on val."
+        "ttp",
+        help="Compare test-time-only preprocessing (autocontrast/CLAHE/hist-eq/"
+        "brightness-contrast) on val.",
     )
     ttp_parser.add_argument("--data-dir", type=Path, required=True, help="ChickenDet dataset root.")
     ttp_parser.add_argument("--weights", type=Path, required=True, help="Trained .pt file.")
@@ -867,7 +416,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """CLI entry point — see `_build_arg_parser` for `--help` on each subcommand."""
+    """CLI entry point — see `_build_arg_parser` for `--help` on each subcommand.
+
+    Imports from `tuning`/`preprocessing_eval` are local to this function, not at module
+    top level — both of those modules import core pieces (`train`, `SEED`, `CLASS_NAMES`,
+    `CUSTOM_AUGMENTATION_PARAM_RANGES`) from *this* module, so a top-level import here
+    would be circular. See docs/adr/0010-split-yolo-py-by-responsibility.md.
+    """
+    from poultry_monitoring.detection.preprocessing_eval import evaluate_test_time_preprocessing
+    from poultry_monitoring.detection.tuning import (
+        progressive_unfreeze_train,
+        run_size_sweep,
+        tune_augmentation_parameters,
+        tune_hyperparameters,
+    )
+
     args = _build_arg_parser().parse_args()
 
     if args.command == "predict":
@@ -882,17 +445,22 @@ def main() -> None:
     project = data_dir / "YOLO"
 
     if args.command == "tune":
-        data_yaml = prepare_data(data_dir, force_relabel=args.force_relabel)
+        data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
+        output_path = (
+            args.output if args.output is not None else project / "best_hyperparameters.json"
+        )
         best = tune_hyperparameters(
             data_yaml,
             project,
             iterations=args.iterations,
             epochs=args.epochs,
             fraction=args.fraction,
+            output_path=output_path,
         )
         print(json.dumps(best))
+        print(f"Saved to {output_path}")
     elif args.command == "augtune":
-        data_yaml = prepare_data(data_dir, force_relabel=args.force_relabel)
+        data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
         best = tune_augmentation_parameters(
             data_yaml,
             project,
@@ -902,29 +470,37 @@ def main() -> None:
         )
         print(best)
     elif args.command == "train":
-        data_yaml = prepare_data(data_dir, force_relabel=args.force_relabel)
+        data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
+        hyperparameters = _load_hyperparameters(
+            args.hyperparameters_json, args.hyperparameters_file
+        )
         outcome = train(
             data_yaml,
             project,
             model_name=args.model_name,
             variant=args.variant,
-            hyperparameters=json.loads(args.hyperparameters_json),
+            hyperparameters=hyperparameters,
             epochs=args.epochs,
             patience=args.patience,
             fraction=args.fraction,
             imgsz=args.imgsz,
             resume_from=args.resume_from,
+            freeze=args.freeze,
         )
         print(outcome)
     elif args.command == "unfreeze":
-        data_yaml = prepare_data(data_dir, force_relabel=args.force_relabel)
+        data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
+        hyperparameters = _load_hyperparameters(
+            args.hyperparameters_json, args.hyperparameters_file
+        )
         outcomes = progressive_unfreeze_train(
             data_yaml,
             project,
             model_name=args.model_name,
             initial_weights=args.initial_weights,
-            hyperparameters=json.loads(args.hyperparameters_json),
+            hyperparameters=hyperparameters,
             fraction=args.fraction,
+            run_name=args.run_name,
         )
         print(outcomes)
     elif args.command == "sweep":

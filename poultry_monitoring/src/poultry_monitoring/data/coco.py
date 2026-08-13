@@ -125,3 +125,28 @@ def build_data_yaml(data_dir: Path, class_names: dict[int, str], yaml_path: Path
     with yaml_path.open("w") as f:
         yaml.safe_dump(data_yaml, f)
     return yaml_path
+
+
+def prepare_data(data_dir: Path, class_names: dict[int, str], force_relabel: bool = False) -> Path:
+    """Fix `iscrowd`, convert COCO to YOLO labels (with segments), and write the data YAML.
+
+    Segments are included even for a detection-only run: Ultralytics' native `copy_paste`
+    density augmentation silently no-ops without them. A `detect`-task model trains on
+    the derived boxes either way.
+
+    Args:
+        data_dir: Dataset root (contains `images/`, `annotations/`).
+        class_names: Mapping of class index to name, e.g. `{0: "Chicken"}`.
+        force_relabel: Regenerate `labels/` even if it already exists. Needed the first
+            time this runs against a `labels/` dir a box-only conversion already wrote
+            — otherwise the existing box-only labels are kept as-is and `copy_paste`
+            silently has no segments.
+
+    Returns:
+        Path to the written `data.yaml`.
+    """
+    annotations_dir = data_dir / "annotations"
+    for split in ("Train", "Validation", "Test"):
+        fix_iscrowd_field(annotations_dir / f"instances_{split}.json", assume_yes=True)
+    convert_coco_to_yolo_labels(data_dir, annotations_dir, force=force_relabel, use_segments=True)
+    return build_data_yaml(data_dir, class_names, data_dir / "chickendet.yaml")
