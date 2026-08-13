@@ -270,18 +270,21 @@ def predict(
     )
 
 
-def _load_hyperparameters(json_str: str, file_path: Path | None) -> dict:
-    """Load a `--hyperparameters-json`/`--hyperparameters-file` pair into one dict.
+def _load_json_arg(json_str: str, file_path: Path | None) -> dict:
+    """Load a `--<x>-json`/`--<x>-file` CLI pair into one dict.
 
     `file_path` wins when both are given — meant for a file written by `tune`'s
-    `--output`, sidestepping having to shell-quote a JSON blob by hand.
+    `--output`, sidestepping having to shell-quote a JSON blob by hand (PowerShell in
+    particular mangles quotes in an inline JSON argument passed to a native exe).
+    Shared by `train`/`unfreeze`'s `--hyperparameters-*` and `ttp`'s `--variants-*` —
+    all three are just "a JSON dict, inline or from a file."
 
     Args:
         json_str: Raw JSON string, e.g. `args.hyperparameters_json`.
         file_path: Path to a JSON file, e.g. `args.hyperparameters_file`.
 
     Returns:
-        The parsed hyperparameters dict.
+        The parsed dict.
     """
     if file_path is not None:
         return json.loads(Path(file_path).read_text())
@@ -411,6 +414,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     ttp_parser.add_argument("--data-dir", type=Path, required=True, help="ChickenDet dataset root.")
     ttp_parser.add_argument("--weights", type=Path, required=True, help="Trained .pt file.")
+    ttp_parser.add_argument(
+        "--variants-json",
+        type=str,
+        default="{}",
+        help='JSON spec of extra variants to test, e.g. \'{"bc_b30_c18": {"technique": '
+        '"brightness_contrast", "brightness": -30, "contrast": 1.8}}\'. "technique" must '
+        "be one of TEST_TIME_PREPROCESSORS' keys (autocontrast/clahe/hist_eq/"
+        "brightness_contrast); everything else is passed through as that technique's "
+        "kwargs. Replaces the default candidate set rather than adding to it.",
+    )
+    ttp_parser.add_argument(
+        "--variants-file",
+        type=Path,
+        default=None,
+        help="JSON file with the same shape as --variants-json. Wins over "
+        "--variants-json if both are given — PowerShell mangles quotes in an inline "
+        "JSON argument passed to a native exe, so this is the reliable option there.",
+    )
+    ttp_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write the results dict here as JSON. Defaults to <project>/ttp_results.json.",
+    )
 
     return parser
 
@@ -423,7 +450,10 @@ def main() -> None:
     `CUSTOM_AUGMENTATION_PARAM_RANGES`) from *this* module, so a top-level import here
     would be circular. See docs/adr/0010-split-yolo-py-by-responsibility.md.
     """
-    from poultry_monitoring.detection.preprocessing_eval import evaluate_test_time_preprocessing
+    from poultry_monitoring.detection.preprocessing_eval import (
+        build_preprocessors_from_spec,
+        evaluate_test_time_preprocessing,
+    )
     from poultry_monitoring.detection.tuning import (
         progressive_unfreeze_train,
         run_size_sweep,
@@ -471,9 +501,7 @@ def main() -> None:
         print(best)
     elif args.command == "train":
         data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
-        hyperparameters = _load_hyperparameters(
-            args.hyperparameters_json, args.hyperparameters_file
-        )
+        hyperparameters = _load_json_arg(args.hyperparameters_json, args.hyperparameters_file)
         outcome = train(
             data_yaml,
             project,
@@ -490,9 +518,7 @@ def main() -> None:
         print(outcome)
     elif args.command == "unfreeze":
         data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
-        hyperparameters = _load_hyperparameters(
-            args.hyperparameters_json, args.hyperparameters_file
-        )
+        hyperparameters = _load_json_arg(args.hyperparameters_json, args.hyperparameters_file)
         outcomes = progressive_unfreeze_train(
             data_yaml,
             project,
@@ -520,8 +546,17 @@ def main() -> None:
         )
         print(outcomes)
     elif args.command == "ttp":
-        results = evaluate_test_time_preprocessing(data_dir, args.weights, project)
+        variants = _load_json_arg(args.variants_json, args.variants_file)
+        output_path = args.output if args.output is not None else project / "ttp_results.json"
+        results = evaluate_test_time_preprocessing(
+            data_dir,
+            args.weights,
+            project,
+            preprocessors=build_preprocessors_from_spec(variants) if variants else None,
+            output_path=output_path,
+        )
         print(results)
+        print(f"Saved to {output_path}")
 
 
 if __name__ == "__main__":

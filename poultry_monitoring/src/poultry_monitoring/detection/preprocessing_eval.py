@@ -6,6 +6,7 @@ because a genuinely different transform is still worth re-testing, not because a
 them are expected to win by default.
 """
 
+import json
 import shutil
 from collections.abc import Callable
 from functools import partial
@@ -69,28 +70,41 @@ def _brightness_contrast_image(
     return cv2.cvtColor(cv2.merge([lightness, a, b]), cv2.COLOR_LAB2RGB)
 
 
-# Test-time-only preprocessing candidates — no retraining involved, see
-# `evaluate_test_time_preprocessing`. The brightness_contrast_*/autocontrast_cutoff*
-# entries came out of a visual sweep (docs/images/preprocessing_sweep_v2_*.png,
-# clahe_low_range_sweep.png) — brightness_contrast at the aggressive end was the clear
-# winner there (clean bird/background separation, no artifacts); autocontrast is only
-# viable in this narrow low-cutoff band before it introduces color-cast/noise; clahe
-# didn't show a usable range at all, so it's kept only at its original mild default.
+# Base test-time-only preprocessing techniques, each callable with just an image (its
+# own defaults apply) — no retraining involved, see `evaluate_test_time_preprocessing`.
+# Specific parameter choices (e.g. an aggressive brightness/contrast combo found via a
+# visual sweep) don't belong here as more hardcoded entries — build them at call time
+# with `build_preprocessors_from_spec`, or pass a custom `preprocessors` dict directly.
 TEST_TIME_PREPROCESSORS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
     "autocontrast": _autocontrast_image,
     "clahe": _clahe_image,
     "hist_eq": _histogram_equalize_image,
     "brightness_contrast": _brightness_contrast_image,
-    "brightness_contrast_b30_c18": partial(
-        _brightness_contrast_image, brightness=-30.0, contrast=1.8
-    ),
-    "brightness_contrast_b30_c20": partial(
-        _brightness_contrast_image, brightness=-30.0, contrast=2.0
-    ),
-    "autocontrast_cutoff4": partial(_autocontrast_image, cutoff=4.0),
-    "autocontrast_cutoff5": partial(_autocontrast_image, cutoff=5.0),
-    "autocontrast_cutoff6": partial(_autocontrast_image, cutoff=6.0),
 }
+
+
+def build_preprocessors_from_spec(
+    spec: dict[str, dict],
+) -> dict[str, Callable[[np.ndarray], np.ndarray]]:
+    """Build a name -> single-image-transform dict from a `{name: {technique, **params}}` spec.
+
+    Lets a caller (e.g. the `ttp` CLI's `--variants-json`) test specific parameter
+    choices without hardcoding them as module-level constants.
+
+    Args:
+        spec: `{variant_name: {"technique": <one of TEST_TIME_PREPROCESSORS' keys>, **params}}`.
+            `params` are passed through as keyword arguments to that technique's function.
+
+    Returns:
+        `{variant_name: <single-image-transform>}`, ready for
+        `evaluate_test_time_preprocessing`'s `preprocessors` argument.
+    """
+    result = {}
+    for name, params in spec.items():
+        params = dict(params)
+        technique = params.pop("technique")
+        result[name] = partial(TEST_TIME_PREPROCESSORS[technique], **params)
+    return result
 
 
 def _write_preprocessed_validation_split(
@@ -122,11 +136,14 @@ def evaluate_test_time_preprocessing(
     weights_path: Path,
     project: Path,
     preprocessors: dict[str, Callable[[np.ndarray], np.ndarray]] | None = None,
+    output_path: Path | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compare validation-set metrics of each preprocessed variant against the baseline.
 
     Each preprocessor runs over every validation image once, unconditionally — no
-    retraining involved, inference/eval only.
+    retraining involved, inference/eval only. Ultralytics' own `model.val()` artifacts
+    (PR curves, confusion matrix) land under `<project>/ttp-<name>/`, but the actual
+    comparison numbers below aren't among them — pass `output_path` to keep them.
 
     Args:
         data_dir: ChickenDet root (must already have `chickendet.yaml` from
@@ -135,6 +152,7 @@ def evaluate_test_time_preprocessing(
         project: Local save dir for `model.val()` artifacts and each variant's image copy.
         preprocessors: Name -> image-array-in, image-array-out function. Defaults to
             `TEST_TIME_PREPROCESSORS`.
+        output_path: If given, write the full results dict there as JSON.
 
     Returns:
         `{"baseline": {...}, <preprocessor_name>: {...}, ...}`, each value the same
@@ -182,4 +200,6 @@ def evaluate_test_time_preprocessing(
         results[name] = box_metrics(
             model.val(data=str(yaml_path), project=str(project), name=f"ttp-{name}", exist_ok=True)
         )
+    if output_path is not None:
+        Path(output_path).write_text(json.dumps(results, indent=2))
     return results
