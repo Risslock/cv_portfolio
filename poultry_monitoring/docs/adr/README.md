@@ -18,3 +18,6 @@ instead of inlining the full rationale — see `docs/adr/template.md` for the fo
 | [0010](0010-split-yolo-py-by-responsibility.md) | Split `detection/yolo.py` into core/`tuning.py`/`preprocessing_eval.py` by responsibility, keeping the CLI unified via a local (not top-level) import to avoid a circular dependency |
 | [0011](0011-conservative-search-result-not-adopted.md) | ADR 0008's 16-trial search winner underperforms baseline at real scale in both cold-start and warm-start regimes — not adopted |
 | [0012](0012-directional-brightness-contrast-augmentation.md) | Directional (asymmetric) `brightness_limit`/`contrast_limit` as a training-time augmentation — new best `yolo26n` result, adopted |
+| [0013](0013-rle-to-polygon-preprocessing-for-yolo-seg-conversion.md) | Preprocess RLE segmentations to polygons before `convert_coco`, cache persistently — `convert_coco` silently bbox-fills RLE-only masks otherwise |
+| [0014](0014-copy-paste-donor-bank-design.md) | Curated, disk-cached (PNG pair) donor bank for synthetic copy-paste, with scene-relative Normal(mean, std) resizing |
+| [0015](0015-color-aware-donor-compositing.md) | LAB-space statistical color transfer (Reinhard-style) to match a pasted donor's color to the target scene's own birds |

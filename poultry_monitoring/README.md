@@ -19,6 +19,7 @@ Detecting and segmenting individual chickens in dense, overhead poultry farm ima
 - [Usage](#usage)
 - [Results](#results)
 - [Key Findings](#key-findings)
+- [Synthetic Copy-Paste Data Augmentation](#synthetic-copy-paste-data-augmentation)
 - [Portfolio Scope & Objectives](#portfolio-scope--objectives)
 - [Project Docs](#project-docs)
 - [Status](#status)
@@ -211,6 +212,31 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 - **A conservative, hand-curated search space still found a losing config** ([ADR 0008](docs/adr/0008-conservative-hyperparameter-space.md), [ADR 0011](docs/adr/0011-conservative-search-result-not-adopted.md)) — narrowing the search space (down from a near-copy of Ultralytics' own wide `Tuner.space`) didn't guarantee a winner. A real 16-trial run's best trial, applied at full scale, underperformed the pre-session baseline in *both* cold-start (`Δ −0.0286` mAP50-95) and warm-start/continued-fine-tuning (`Δ −0.0169`) regimes — confirmed via matched-config re-runs, not just a one-off. The cold-start run's per-epoch curve converged completely normally (no instability); it simply plateaued at a genuinely worse optimum. Not adopted — production stays on the pre-session near-default augmentation config.
 - **Third time was the charm for the "birds are white, background is dark litter" idea** ([ADR 0012](docs/adr/0012-directional-brightness-contrast-augmentation.md)) — two earlier attempts at the same observation both failed: a fixed test-time-only transform (entry above, worse than the original CLAHE/hist-eq failures), and via the ADR 0011 search. What worked was applying it as an *asymmetric, training-time* augmentation instead — `RandomBrightnessContrast` with `brightness_limit=(-0.35,-0.05)`, `contrast_limit=(0.3,0.7)` (always darken, always boost contrast, but still resampled per call, not fixed) — needing zero new code, since Albumentations already accepts asymmetric-tuple limits and this project's hyperparameter plumbing already passes values through untouched. Behind the baseline through the first two progressive-unfreeze stages, only overtaking once the whole backbone is trainable: `box_map50_95=0.8929` vs. the prior best `0.8919` (`Δ +0.0010`), `precision +0.0058`, `recall −0.0040`. Modest, but real — the first configuration all session to beat the pre-session baseline end-to-end, and now the adopted `yolo26n` config.
 
+## Synthetic Copy-Paste Data Augmentation
+
+Part of the segmentation prototype (`notebooks/03_explore_segmentation.ipynb`, Phase 3): pasting real, curated bird cutouts into training images to control density and occlusion directly, instead of being limited to whatever density ChickenDet happened to film.
+
+<p align="center">
+  <img src="docs/images/synthetic_copy_paste_before_after.png" width="800" alt="Before and after: a dense training image with 22 real chicken instances (left), and the same image with 8 additional synthetic instances pasted in via the curated donor bank (right), colored mask overlay showing every instance">
+</p>
+
+- **Curated donor bank** — filters out occluded or cut-off birds *before* caching, not after: mask/box area ratio ≥ 0.6 (below the dataset's own ~65% median occlusion, so it's not rejecting the typical instance) and an 80px border margin (quality over quantity — the candidate pool stays in the tens of thousands even that conservative, so there's no real cost to it). 500 instances cached as browsable PNG image + mask pairs — deliberately not `.npz`/COCO json/YOLO polygon labels, see [ADR 0014](docs/adr/0014-copy-paste-donor-bank-design.md) for why.
+
+<p align="center">
+  <img src="docs/images/synthetic_copy_paste_donor_bank.png" width="700" alt="Grid of 8 sample donor instances from the curated bank, background dimmed outside each mask to show the curated silhouette">
+</p>
+
+- **Overlap-aware placement** — rejection-sampled, so a paste doesn't just bury a bird that's already there.
+- **Donor-side augmentation** — flip + full 360° rotation, since this is overhead imagery with no canonical "up" for a bird.
+- **Domain-aware resize** — each pasted bird's size is drawn from *that scene's own* size distribution (mean + std), not a fixed range. Modeled directly on how a real flock's weight — and so apparent size — spreads out as it grows, rather than an arbitrary jitter.
+- **Color-aware compositing** — a donor pulled from one ChickenVerse facility's lighting can carry a visibly different color cast than the target scene (spotted directly in an early raw, non-mask-overlaid version of the example above — several pasted birds read as obviously bluish/gray). Fixed with the same idea as the size fix: match each donor's LAB color statistics to the *target scene's own real birds* (mean + std of their actual pixels, not the background), a standard statistical color-transfer technique. Below: same scene, same 8 donors, same placements — the only difference is this one step.
+
+<p align="center">
+  <img src="docs/images/synthetic_copy_paste_color_matching.png" width="800" alt="Side by side: the same 8 synthetic instances pasted without color matching (left, several read as obviously bluish/gray) versus with LAB color matching to the scene's real birds (right, blending in convincingly)">
+</p>
+
+Notebook prototype only — not yet wired into `augmentation/segmentation.py` or an actual training run, per this project's own notebook-first workflow (constitution Principle II). Also fixed along the way: `ultralytics.data.converter.convert_coco` silently degrades ChickenDet's compressed-RLE masks to bbox-shaped rectangles unless preprocessed first — mean IoU against the real mask went from 0.63 to 0.97 once fixed (see [ADR 0013](docs/adr/0013-rle-to-polygon-preprocessing-for-yolo-seg-conversion.md)). Full design rationale for the resize and color fixes, including rejected alternatives, in [ADR 0014](docs/adr/0014-copy-paste-donor-bank-design.md)/[ADR 0015](docs/adr/0015-color-aware-donor-compositing.md).
+
 ## Portfolio Scope & Objectives
 
 ### Detection track — done
@@ -223,14 +249,14 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 
 - **Task-separated, shared-utility package structure**: `src/poultry_monitoring/` — `data/`, `augmentation/`, `detection/` — each a small set of typed, docstringed functions, not one long script; a single CLI (`python -m poultry_monitoring.detection.yolo <command>`) drives tuning, training, progressive unfreezing, inference, and comparison runs.
 - **Experiment tracking**: every tuning/training run logged to MLflow (params, per-epoch metrics, final val metrics, artifacts) — see [`CLAUDE.md`](CLAUDE.md) § MLflow Conventions for the schema.
-- **Decision records**: 12 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner, or why a promising-looking hyperparameter search still lost) rather than just asserting a conclusion.
+- **Decision records**: 15 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner, why a promising-looking hyperparameter search still lost, or why `convert_coco` was silently producing bbox-shaped masks) rather than just asserting a conclusion.
 - **Exploratory-then-productionized workflow**: notebooks establish that an approach works; `src/poultry_monitoring/` is the redesigned, tested, CLI-driven version — not a line-for-line port (constitution Principle II).
 - **Test coverage scoped deliberately**: `pytest` smoke tests cover deterministic pipeline code (COCO parsing, augmentation shapes/behavior, hyperparameter routing) — not training convergence, which isn't a unit-testable property (constitution Principle VIII).
 - **Governance sized to the project**: `constitution.md` + `plan.md` + `CLAUDE.md` — heavier than a single README, lighter than full spec-kit — see [Project Docs](#project-docs).
 
 ### Beyond detection — in progress / planned
 
-4. Instance segmentation on the same dataset (YOLO26-seg), same tune/train/MLflow treatment as detection — Phase 3 in [`plan.md`](plan.md), now underway (`notebooks/03_explore_segmentation.ipynb`: mask quality, conversion fidelity, an augmentation prototyping sandbox).
+4. Instance segmentation on the same dataset (YOLO26-seg), same tune/train/MLflow treatment as detection — Phase 3 in [`plan.md`](plan.md), now underway (`notebooks/03_explore_segmentation.ipynb`: mask quality, conversion fidelity, an augmentation prototyping sandbox, and a synthetic copy-paste data pipeline — see [Synthetic Copy-Paste Data Augmentation](#synthetic-copy-paste-data-augmentation)).
 5. Hands-on practice with a transformer-based detector (DETR) as a secondary track — compared fairly against YOLO26 if/when both are far enough along, not a gating requirement.
 6. A GPU-accelerated data loading pipeline (DALI vs. a standard loader), if profiling shows it's warranted.
 7. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets.
