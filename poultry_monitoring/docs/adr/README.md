@@ -17,3 +17,4 @@ instead of inlining the full rationale — see `docs/adr/template.md` for the fo
 | [0009](0009-revert-to-in-process-optuna-trials.md) | Reverted ADR 0007's subprocess-per-trial mechanism for a plain in-process Optuna objective, deliberately accepting the RAM-leak risk it had fixed |
 | [0010](0010-split-yolo-py-by-responsibility.md) | Split `detection/yolo.py` into core/`tuning.py`/`preprocessing_eval.py` by responsibility, keeping the CLI unified via a local (not top-level) import to avoid a circular dependency |
 | [0011](0011-conservative-search-result-not-adopted.md) | ADR 0008's 16-trial search winner underperforms baseline at real scale in both cold-start and warm-start regimes — not adopted |
+| [0012](0012-directional-brightness-contrast-augmentation.md) | Directional (asymmetric) `brightness_limit`/`contrast_limit` as a training-time augmentation — new best `yolo26n` result, adopted |

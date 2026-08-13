@@ -160,30 +160,30 @@ Export/benchmark CLI entry points don't exist yet — Phase 6 in [`plan.md`](pla
 
 | Model | Split | Precision | Recall | mAP50 | mAP50-95 | Notes |
 |---|---|---|---|---|---|---|
-| `yolo26n` (this project) | val | 0.965 | 0.953 | 0.987 | 0.892 | Tuned hyperparameters + custom augmentation + progressive unfreezing (3 stages, `freeze` 10→5→0), full dataset. |
-| `yolo26n` (ChickenVerse published) | val | — | — | 0.987 | 0.890 | Reference baseline, same architecture/scale — effectively the same result (Δ ≤ 0.002, within run-to-run noise), reached via a different training approach; see below. |
-| `yolo26s` (this project) | val | 0.967 | 0.951 | 0.989 | 0.904 | Tuned config, straight `train()` — **no** progressive unfreezing applied yet. |
+| `yolo26n` (this project) | val | 0.971 | 0.949 | 0.988 | 0.893 | Tuned hyperparameters + directional (asymmetric) brightness/contrast augmentation + progressive unfreezing (3 stages, `freeze` 10→5→0), full dataset — see [ADR 0012](docs/adr/0012-directional-brightness-contrast-augmentation.md). |
+| `yolo26n` (ChickenVerse published) | val | — | — | 0.987 | 0.890 | Reference baseline, same architecture/scale — this project's number is now marginally ahead (Δ +0.003 mAP50-95), reached via a different training approach; see below. |
+| `yolo26s` (this project) | val | 0.967 | 0.951 | 0.989 | 0.904 | Tuned config (pre-[ADR 0012](docs/adr/0012-directional-brightness-contrast-augmentation.md)), straight `train()` — **no** progressive unfreezing or the directional augmentation applied yet. |
 | `yolo26s` (ChickenVerse published) | val | — | — | 0.990 | 0.919 | Reference baseline — close on mAP50, a real gap remains on mAP50-95 (same shape `yolo26n` had *before* unfreezing). |
 
 All numbers are validation-split metrics from an explicit `model.val()` pass after training (not training-loop numbers). ChickenVerse's own benchmark table reports two separate mAP columns — only the `val_mAP50`/`val_mAP50-95` ones are comparable to the numbers above; see [`plan.md`](plan.md) Phase 2 for the full note. **The test split is intentionally not used for any comparison or tuning decision**, to avoid implicitly fitting it.
 
 ### Training Configuration
 
-`yolo26n`'s result above lands within noise of ChickenVerse's own published number, but the two were reached through different training setups — the interesting comparison is the approach, not the third decimal place:
+`yolo26n`'s result above is now marginally ahead of ChickenVerse's own published number, but the two were reached through different training setups — the interesting comparison is the approach, not the third decimal place:
 
 | Parameter | This project | ChickenVerse ([source](https://github.com/amirivojdan/ChickenVerse)) |
 |---|---|---|
-| Epochs | ~94–121 (initial, patience-based) + 3×30 (progressive unfreezing) | 20 (fixed) |
+| Epochs | ~136 (cold-start, patience-based, best at epoch 119) + 3×30 (progressive unfreezing) | 20 (fixed) |
 | Patience | 15 (initial), 3 (unfreeze stages) | 10 |
 | Layer freezing | Progressive: 3 stages, `freeze` 10→5→0, `lr0` 5e-4→1e-4→2e-5 | All layers unfrezeed — a single `model.train()` call per model variant |
-| Hyperparameter search | Ultralytics genetic tuner (20 iterations) + custom random search (8 trials) | Fixed, not searched |
-| Custom augmentation | Color invariance, lighting/contrast, randomized autocontrast, occlusion simulation (Albumentations) | Ultralytics' stock augmentation, unmodified |
+| Hyperparameter search | In-process Optuna over a conservative, hand-curated space ([ADR 0008](docs/adr/0008-conservative-hyperparameter-space.md)/[0009](docs/adr/0009-revert-to-in-process-optuna-trials.md)) — its own winner underperformed and wasn't adopted ([ADR 0011](docs/adr/0011-conservative-search-result-not-adopted.md)) | Fixed, not searched |
+| Custom augmentation | Directional (asymmetric) brightness/contrast bias, color invariance, randomized autocontrast, occlusion simulation (Albumentations) — [ADR 0012](docs/adr/0012-directional-brightness-contrast-augmentation.md) | Ultralytics' stock augmentation, unmodified |
 | Batch size | Ultralytics auto-batch | 16 (fixed) |
 | Experiment tracking | Every run logged to MLflow | Not present in their notebook |
 
 Comparable results from meaningfully different budgets and approaches — theirs a straightforward, fast 20-epoch benchmark across 8 model variants in one notebook; this project's a slower, deliberately tuned/searched/unfrozen path on one model at a time.
 
-This table reflects the state as of the last update — [`plan.md`](plan.md) Phase 2 is the live source of truth for anything still in flight.
+This table reflects `yolo26n`'s final, adopted configuration — Phase 2 is done; [`plan.md`](plan.md) Phase 3 (segmentation) is where things are currently in flight.
 
 ### Sample Predictions
 
@@ -209,27 +209,28 @@ Learnings worth keeping visible here, not just buried in `plan.md`'s working his
 - **`AutoContrast`'s cutoff needed to vary per-application, not get tuned to one fixed value** — Albumentations' `RandomBrightnessContrast` auto-symmetrizes a tuned scalar into a fresh `±range` every call, but `AutoContrast.cutoff` doesn't have that built in; the augmentation search had converged it to a single always-identical value. Fixed with a small subclass that resamples `cutoff` from a fixed range each application instead.
 - **`copy_paste_mode` (`"flip"` vs `"mixup"`) is a wash at proxy scale** — every metric within 0.006 between the two; not a meaningful lever for this dataset as tested, despite a real theoretical scale-mismatch risk for `"mixup"` (unmatched cutout/background scale) that didn't clearly show up in the numbers either.
 - **A conservative, hand-curated search space still found a losing config** ([ADR 0008](docs/adr/0008-conservative-hyperparameter-space.md), [ADR 0011](docs/adr/0011-conservative-search-result-not-adopted.md)) — narrowing the search space (down from a near-copy of Ultralytics' own wide `Tuner.space`) didn't guarantee a winner. A real 16-trial run's best trial, applied at full scale, underperformed the pre-session baseline in *both* cold-start (`Δ −0.0286` mAP50-95) and warm-start/continued-fine-tuning (`Δ −0.0169`) regimes — confirmed via matched-config re-runs, not just a one-off. The cold-start run's per-epoch curve converged completely normally (no instability); it simply plateaued at a genuinely worse optimum. Not adopted — production stays on the pre-session near-default augmentation config.
+- **Third time was the charm for the "birds are white, background is dark litter" idea** ([ADR 0012](docs/adr/0012-directional-brightness-contrast-augmentation.md)) — two earlier attempts at the same observation both failed: a fixed test-time-only transform (entry above, worse than the original CLAHE/hist-eq failures), and via the ADR 0011 search. What worked was applying it as an *asymmetric, training-time* augmentation instead — `RandomBrightnessContrast` with `brightness_limit=(-0.35,-0.05)`, `contrast_limit=(0.3,0.7)` (always darken, always boost contrast, but still resampled per call, not fixed) — needing zero new code, since Albumentations already accepts asymmetric-tuple limits and this project's hyperparameter plumbing already passes values through untouched. Behind the baseline through the first two progressive-unfreeze stages, only overtaking once the whole backbone is trainable: `box_map50_95=0.8929` vs. the prior best `0.8919` (`Δ +0.0010`), `precision +0.0058`, `recall −0.0040`. Modest, but real — the first configuration all session to beat the pre-session baseline end-to-end, and now the adopted `yolo26n` config.
 
 ## Portfolio Scope & Objectives
 
 ### Detection track — done
 
-1. **Fine-tuned and hyperparameter-optimized a CNN-based detector (YOLO26)** to a genuinely strong result on a dense, occluded dataset: `yolo26n` lands within noise of ChickenVerse's own published baseline after a built-in hyperparameter search, a custom-augmentation random search, and progressive unfreezing — see [Results](#results) for the numbers and [Training Configuration](#training-configuration) for how the two setups actually differ.
-2. **Built a domain-specific augmentation strategy** for dense, small, occluded objects: Albumentations-based color-invariance, lighting, and occlusion-simulation transforms, searched alongside Ultralytics' own hyperparameters, with a bounding-box-aware visualization CLI to eyeball the effect before committing to a search.
-3. **Ran and documented negative results, not just wins**: test-time preprocessing and `copy_paste_mode` A/B both came back flat-or-negative — kept and written up (ADR + README [Key Findings](#key-findings)) instead of quietly dropped, because knowing what *doesn't* help is part of the actual engineering record.
+1. **Fine-tuned and hyperparameter-optimized a CNN-based detector (YOLO26)** to a genuinely strong result on a dense, occluded dataset: `yolo26n` now slightly *beats* ChickenVerse's own published baseline (`box_map50_95` +0.003) after a hyperparameter search, a domain-informed directional augmentation, and progressive unfreezing — see [Results](#results) for the numbers and [Training Configuration](#training-configuration) for how the two setups actually differ.
+2. **Built a domain-specific augmentation strategy** for dense, small, occluded objects: Albumentations-based color-invariance, lighting, occlusion-simulation, and a directional (asymmetric) brightness/contrast transform — searched alongside Ultralytics' own hyperparameters, with a bounding-box-aware visualization CLI to eyeball the effect before committing to a search.
+3. **Ran and documented negative results, not just wins**: test-time preprocessing, a full hyperparameter-search config, and `copy_paste_mode` A/B all came back flat-or-negative — kept and written up (ADR + README [Key Findings](#key-findings)) instead of quietly dropped, because knowing what *doesn't* help is part of the actual engineering record. The eventual win came from applying one of those failed ideas differently, not from abandoning it.
 
 ### Production practices demonstrated along the way
 
 - **Task-separated, shared-utility package structure**: `src/poultry_monitoring/` — `data/`, `augmentation/`, `detection/` — each a small set of typed, docstringed functions, not one long script; a single CLI (`python -m poultry_monitoring.detection.yolo <command>`) drives tuning, training, progressive unfreezing, inference, and comparison runs.
 - **Experiment tracking**: every tuning/training run logged to MLflow (params, per-epoch metrics, final val metrics, artifacts) — see [`CLAUDE.md`](CLAUDE.md) § MLflow Conventions for the schema.
-- **Decision records**: 4 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner) rather than just asserting a conclusion.
+- **Decision records**: 12 [ADRs](docs/adr/README.md) capturing non-obvious calls, several reached by testing an assumption and finding it wrong (e.g. why the augmentation search can't share Ultralytics' own tuner, or why a promising-looking hyperparameter search still lost) rather than just asserting a conclusion.
 - **Exploratory-then-productionized workflow**: notebooks establish that an approach works; `src/poultry_monitoring/` is the redesigned, tested, CLI-driven version — not a line-for-line port (constitution Principle II).
 - **Test coverage scoped deliberately**: `pytest` smoke tests cover deterministic pipeline code (COCO parsing, augmentation shapes/behavior, hyperparameter routing) — not training convergence, which isn't a unit-testable property (constitution Principle VIII).
 - **Governance sized to the project**: `constitution.md` + `plan.md` + `CLAUDE.md` — heavier than a single README, lighter than full spec-kit — see [Project Docs](#project-docs).
 
-### Beyond detection — planned, not started
+### Beyond detection — in progress / planned
 
-4. Instance segmentation on the same dataset (YOLO26-seg), same tune/train/MLflow treatment as detection — Phase 3 in [`plan.md`](plan.md).
+4. Instance segmentation on the same dataset (YOLO26-seg), same tune/train/MLflow treatment as detection — Phase 3 in [`plan.md`](plan.md), now underway (`notebooks/03_explore_segmentation.ipynb`: mask quality, conversion fidelity, an augmentation prototyping sandbox).
 5. Hands-on practice with a transformer-based detector (DETR) as a secondary track — compared fairly against YOLO26 if/when both are far enough along, not a gating requirement.
 6. A GPU-accelerated data loading pipeline (DALI vs. a standard loader), if profiling shows it's warranted.
 7. Exporting and optimizing trained models (ONNX, TFLite/LiteRT) and comparing inference latency/throughput across targets.
@@ -248,4 +249,4 @@ This project uses a hybrid workflow — heavier than a single `CLAUDE.md`, light
 
 ## Status
 
-🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. `yolo26n` is fully trained through progressive unfreezing and lands within noise of ChickenVerse's published baseline; `yolo26s` is trained but hasn't had the same unfreezing treatment yet (see [Results](#results)). `copy_paste_mode` A/B and test-time-preprocessing comparisons are done (see [Key Findings](#key-findings)); a `multi_scale` hyperparameter re-tune is running now. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.
+🟡 **In progress.** Environment set up and GPU-verified (local + Colab); data exploration and YOLO26 baseline notebooks done; `src/poultry_monitoring/` productionized with a working train/tune/augtune/unfreeze/sweep/predict/ttp CLI. **Detection (Phase 2) is done**: `yolo26n` is fully trained through progressive unfreezing and now slightly beats ChickenVerse's published baseline (see [Results](#results)); `yolo26s` is trained but hasn't had the same unfreezing/directional-augmentation treatment yet — queued, not a blocker. Segmentation (Phase 3) is now the active phase, starting from `notebooks/03_explore_segmentation.ipynb`. See [`plan.md`](plan.md) for phase-by-phase status and the [root repository README](../README.md) for how this project fits into the broader portfolio.
