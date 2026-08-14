@@ -5,6 +5,8 @@ parsing/conversion, not model behavior.
 """
 
 import json
+import os
+import time
 
 import numpy as np
 import pycocotools.mask as mask_utils
@@ -41,6 +43,18 @@ def _write_synthetic_coco(annotations_dir, split: str, iscrowd_values: list[int]
     }
     annotations_dir.mkdir(parents=True, exist_ok=True)
     (annotations_dir / f"instances_{split}.json").write_text(json.dumps(coco))
+
+
+def _bump_mtime_forward(path) -> None:
+    """Set `path`'s mtime a few seconds into the future.
+
+    Rewriting a file in-place within the same test can land on the same mtime (some
+    filesystems' mtime resolution is coarser than a fast test run), which would hide a
+    real fingerprint change -- bumping explicitly makes the "source changed" signal
+    deterministic instead of flaky.
+    """
+    future = time.time() + 5
+    os.utime(path, (future, future))
 
 
 def _make_rle_segmentation(mask: np.ndarray) -> dict:
@@ -201,16 +215,82 @@ class TestCachePolygonAnnotations:
         cache_polygon_annotations(annotations_dir, cache_dir, force=True)
         assert cached_path.exists()  # rebuilt, not just left alone
 
+    def test_regenerates_when_source_annotation_changes_without_force(self, tmp_path):
+        """Re-converts on a genuine source change even without `force=True`.
+
+        Existence of a same-named cached file is no longer sufficient, see
+        docs/adr/0016-fingerprinted-label-cache-invalidation.md.
+        """
+        annotations_dir = tmp_path / "annotations"
+        mask_a = np.zeros((100, 100), dtype=np.uint8)
+        mask_a[10:30, 10:30] = 1
+        _write_synthetic_coco_with_segmentation(
+            annotations_dir, "Train", _make_rle_segmentation(mask_a)
+        )
+        cache_dir = tmp_path / "cache"
+        cache_polygon_annotations(annotations_dir, cache_dir)
+
+        mask_b = np.zeros((100, 100), dtype=np.uint8)
+        mask_b[40:80, 40:80] = 1  # a different, larger square
+        _write_synthetic_coco_with_segmentation(
+            annotations_dir, "Train", _make_rle_segmentation(mask_b)
+        )
+        _bump_mtime_forward(annotations_dir / "instances_Train.json")
+
+        cache_polygon_annotations(annotations_dir, cache_dir)  # still no force
+
+        cached_poly = json.loads((cache_dir / "instances_Train.json").read_text())
+        xs = cached_poly["annotations"][0]["segmentation"][0][0::2]
+        assert min(xs) >= 40  # picked up mask_b's region, not the stale mask_a cache
+
 
 class TestConvertCocoToYoloLabels:
-    def test_skips_when_labels_dir_exists(self, tmp_path):
+    def test_regenerates_stale_labels_dir_with_no_manifest(self, tmp_path):
+        """A pre-existing `labels/` with no fingerprint manifest is rebuilt, not trusted.
+
+        e.g. built before fingerprinting existed -- exactly the real stale-cache bug
+        that motivated it, see docs/adr/0016-...md.
+        """
         data_dir = tmp_path / "ChickenDet"
-        (data_dir / "labels").mkdir(parents=True)
+        (data_dir / "labels" / "Train").mkdir(parents=True)
+        (data_dir / "labels" / "Train" / "stale.txt").write_text("0 0 0 1 1")
         annotations_dir = data_dir / "annotations"
+        _write_synthetic_coco(annotations_dir, "Train", iscrowd_values=[0])
 
-        result = convert_coco_to_yolo_labels(data_dir, annotations_dir)
+        labels_dir = convert_coco_to_yolo_labels(data_dir, annotations_dir)
 
-        assert result == data_dir / "labels"
+        assert not (labels_dir / "Train" / "stale.txt").exists()  # old content discarded
+        assert (labels_dir / "Train" / "img1.txt").exists()  # rebuilt from real inputs
+
+    def test_skips_when_fingerprint_matches(self, tmp_path):
+        data_dir = tmp_path / "ChickenDet"
+        annotations_dir = data_dir / "annotations"
+        _write_synthetic_coco(annotations_dir, "Train", iscrowd_values=[0])
+        convert_coco_to_yolo_labels(data_dir, annotations_dir)
+        label_path = data_dir / "labels" / "Train" / "img1.txt"
+        original_bytes = label_path.read_bytes()
+
+        convert_coco_to_yolo_labels(data_dir, annotations_dir)  # unchanged inputs -- no-op
+
+        assert label_path.read_bytes() == original_bytes
+
+    def test_regenerates_when_source_annotations_change_without_force(self, tmp_path):
+        data_dir = tmp_path / "ChickenDet"
+        annotations_dir = data_dir / "annotations"
+        _write_synthetic_coco(annotations_dir, "Train", iscrowd_values=[0])
+        convert_coco_to_yolo_labels(data_dir, annotations_dir)
+
+        coco_path = annotations_dir / "instances_Train.json"
+        coco = json.loads(coco_path.read_text())
+        coco["annotations"][0]["bbox"] = [0, 0, 40, 40]  # was [10, 10, 20, 20]
+        coco_path.write_text(json.dumps(coco))
+        _bump_mtime_forward(coco_path)
+
+        convert_coco_to_yolo_labels(data_dir, annotations_dir)  # still no force
+
+        label_path = data_dir / "labels" / "Train" / "img1.txt"
+        _cls, _x_c, _y_c, w, _h = map(float, label_path.read_text().split())
+        assert w == pytest.approx(0.4)  # picked up the new bbox, not the stale cache
 
     def test_converts_and_lays_out_alongside_images(self, tmp_path):
         data_dir = tmp_path / "ChickenDet"

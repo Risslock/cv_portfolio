@@ -8,8 +8,16 @@ Productionized from `notebooks/02_yolo26_baseline.ipynb`'s exploration — see t
 notebook's Notes section for the `convert_coco` gotchas this module works around — and
 from `notebooks/03_explore_segmentation.ipynb`'s RLE-to-polygon preprocessing, see
 `docs/adr/0013-rle-to-polygon-preprocessing-for-yolo-seg-conversion.md`.
+
+`cache_polygon_annotations` and `convert_coco_to_yolo_labels` both cache their output on
+disk, keyed by a fingerprint of their *inputs* (source file name/size/mtime +
+`LABEL_FORMAT_VERSION`) rather than by "does an output directory already exist" — a
+real, silently-stale `labels/` directory (built before a `LABEL_FORMAT_VERSION`-worthy
+fix, never rebuilt because it still existed) is what motivated this, see
+docs/adr/0016-fingerprinted-label-cache-invalidation.md.
 """
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -18,6 +26,54 @@ import cv2
 import numpy as np
 import pycocotools.mask as mask_utils
 from ultralytics.data.converter import convert_coco
+
+# Shared dataset schema, not task logic (constitution Principle III) -- both
+# detection/yolo.py and segmentation/yolo.py import this rather than each defining
+# their own copy, since ChickenDet's classes are the same regardless of task.
+CLASS_NAMES = {0: "Chicken"}
+
+# Bump whenever `_convert_rle_to_polygons_in_json`/`convert_coco_to_yolo_labels`'s
+# conversion logic changes (e.g. a different contour-approximation tolerance) --
+# folded into every cache fingerprint below, so a logic change alone invalidates an
+# old cache even when the source annotations themselves didn't change.
+LABEL_FORMAT_VERSION = 1
+MANIFEST_FILENAME = ".cache_manifest.json"
+
+
+def _file_signature(path: Path) -> str:
+    """Cheap per-file fingerprint: name + size + mtime, not a content hash.
+
+    A content hash would be more precise but far slower on ChickenDet's multi-hundred-MB
+    annotation files, and reading the whole file just to decide whether to re-read it
+    defeats the point of caching. name+size+mtime is the same signal `make`/most build
+    caches use for a fast, "good enough for a local-only cache" staleness check.
+
+    Args:
+        path: File to fingerprint.
+
+    Returns:
+        `"v<LABEL_FORMAT_VERSION>:<name>:<size>:<mtime_ns>"`.
+    """
+    stat = path.stat()
+    return f"v{LABEL_FORMAT_VERSION}:{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def _directory_fingerprint(dir_path: Path, pattern: str = "instances_*.json") -> str:
+    """Hash every matching file's `_file_signature` in `dir_path` into one fingerprint.
+
+    Args:
+        dir_path: Directory to fingerprint. Missing/empty is valid (hashes to a fixed
+            value for "no matching files"), so callers don't need to check existence first.
+        pattern: Glob pattern selecting which files count toward the fingerprint.
+
+    Returns:
+        A hex digest that changes if any matching file's name/size/mtime changes, a
+        file is added/removed, or `LABEL_FORMAT_VERSION` is bumped.
+    """
+    hasher = hashlib.sha256()
+    for path in sorted(dir_path.glob(pattern)) if dir_path.exists() else []:
+        hasher.update(_file_signature(path).encode())
+    return hasher.hexdigest()
 
 
 def fix_iscrowd_field(coco_path: Path, assume_yes: bool = False) -> None:
@@ -147,25 +203,41 @@ def cache_polygon_annotations(annotations_dir: Path, cache_dir: Path, force: boo
     persistently rather than recomputed on every call, since `convert_coco_to_yolo_labels`
     runs on every `train`/`tune`/`sweep` invocation, not just once per dataset download.
 
+    Per-file freshness is tracked in a `MANIFEST_FILENAME` manifest inside `cache_dir`
+    (source file name/size/mtime, see `_file_signature`) — a split is only skipped when
+    its cached copy exists *and* its source annotations haven't changed since, not
+    merely because a same-named cached file exists (see docs/adr/0016-...md: an
+    existence-only check let a stale cache outlive both a source data update and a fix
+    to this conversion logic, undetected).
+
     Args:
         annotations_dir: Directory holding the source COCO instances JSONs (already
             `iscrowd`-fixed, if applicable — see `fix_iscrowd_field`).
         cache_dir: Where to write the polygon-converted JSONs, one per
             `instances_*.json` found in `annotations_dir`.
-        force: Rebuild the cache even if it already exists (e.g. after the source
-            annotations changed).
+        force: Rebuild every split's cache regardless of whether its signature already
+            matches the manifest.
 
     Returns:
         `cache_dir`, unchanged, for convenient chaining.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Sibling file, not inside cache_dir itself: `convert_coco_to_yolo_labels` passes
+    # cache_dir straight to `convert_coco` as its `labels_dir` when use_segments=True,
+    # which globs *every* "*.json" file there (dotfiles included, verified on this
+    # Python/OS) expecting each to be a COCO instances file -- a manifest living inside
+    # cache_dir would get picked up and crash it with a `KeyError: 'images'`.
+    manifest_path = cache_dir.parent / f"{cache_dir.name}{MANIFEST_FILENAME}"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
 
     for json_path in sorted(annotations_dir.glob("instances_*.json")):
         output_path = cache_dir / json_path.name
-        if output_path.exists() and not force:
+        signature = _file_signature(json_path)
+        if output_path.exists() and not force and manifest.get(json_path.name) == signature:
             continue
 
         unconverted = _convert_rle_to_polygons_in_json(json_path, output_path)
+        manifest[json_path.name] = signature
         if unconverted:
             print(
                 f"{json_path.name}: {len(unconverted)} annotation(s) had no usable "
@@ -174,6 +246,7 @@ def cache_polygon_annotations(annotations_dir: Path, cache_dir: Path, force: boo
                 f"{' ...' if len(unconverted) > 10 else ''}"
             )
 
+    manifest_path.write_text(json.dumps(manifest))
     return cache_dir
 
 
@@ -188,11 +261,18 @@ def convert_coco_to_yolo_labels(
     `<save_dir>/labels/<json_stem>/`, one level deeper than Ultralytics' training
     convention of `images/<split>` + `labels/<split>` side by side.
 
+    `labels/` is shared by both detection and segmentation (both call this with
+    `use_segments=True`, see `data.prepare_data`), so it's cached and fingerprinted
+    once here rather than split per task — see module docstring and
+    docs/adr/0016-fingerprinted-label-cache-invalidation.md for why existence alone
+    isn't treated as "valid" anymore: a stale `labels/` from before a conversion-logic
+    fix used to be served forever, silently, until something explicitly deleted it.
+
     Args:
         data_dir: Dataset root — must already contain `images/<split>/`.
         annotations_dir: Directory holding the (iscrowd-fixed) COCO instances JSONs.
-        force: Delete and regenerate an existing `labels/` directory instead of
-            skipping. Also forces a rebuild of the polygon annotation cache (see
+        force: Regenerate `labels/` even if its cached fingerprint already matches the
+            current inputs. Also forces a rebuild of the polygon annotation cache (see
             `cache_polygon_annotations`) when `use_segments=True`.
         use_segments: Include segmentation polygons in the label files, not just boxes.
             Needed even for a detection-task run if Ultralytics' native `copy_paste`
@@ -206,15 +286,26 @@ def convert_coco_to_yolo_labels(
         Path to the resulting `<data_dir>/labels/` directory.
     """
     labels_dir = data_dir / "labels"
-    if labels_dir.exists():
-        if not force:
-            return labels_dir
-        shutil.rmtree(labels_dir)
 
     source_dir = annotations_dir
     if use_segments:
         cache_dir = data_dir / "annotations_polygon_cache"
         source_dir = cache_polygon_annotations(annotations_dir, cache_dir, force=force)
+
+    fingerprint = _directory_fingerprint(source_dir)
+    if labels_dir.exists() and not force:
+        manifest_path = labels_dir / MANIFEST_FILENAME
+        cached_fingerprint = (
+            json.loads(manifest_path.read_text()).get("fingerprint")
+            if manifest_path.exists()
+            else None
+        )
+        if cached_fingerprint == fingerprint:
+            return labels_dir
+        print(
+            f"{labels_dir}: cached labels don't match the current source annotations "
+            f"(or LABEL_FORMAT_VERSION was bumped since this cache was built) -- regenerating."
+        )
 
     scratch_dir = data_dir / "yolo_labels_tmp"
     if scratch_dir.exists():
@@ -227,7 +318,21 @@ def convert_coco_to_yolo_labels(
         use_keypoints=False,
         cls91to80=False,
     )
+    manifest_path = scratch_dir / "labels" / MANIFEST_FILENAME
+    manifest_path.write_text(json.dumps({"fingerprint": fingerprint}))
+
+    # Swap the old labels/ out to a backup and the new one in, rather than deleting
+    # labels/ outright first -- keeps the window where a concurrent reader (e.g. an
+    # already-running training job) would find no labels/ at all as short as two
+    # same-volume renames, instead of spanning the whole rebuild.
+    backup_dir = data_dir / "labels_prev_tmp"
+    if labels_dir.exists():
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        shutil.move(str(labels_dir), str(backup_dir))
     shutil.move(str(scratch_dir / "labels"), str(labels_dir))
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
     shutil.rmtree(scratch_dir)
     return labels_dir
 
@@ -266,10 +371,12 @@ def prepare_data(data_dir: Path, class_names: dict[int, str], force_relabel: boo
     Args:
         data_dir: Dataset root (contains `images/`, `annotations/`).
         class_names: Mapping of class index to name, e.g. `{0: "Chicken"}`.
-        force_relabel: Regenerate `labels/` even if it already exists. Needed the first
-            time this runs against a `labels/` dir a box-only conversion already wrote
-            — otherwise the existing box-only labels are kept as-is and `copy_paste`
-            silently has no segments.
+        force_relabel: Regenerate `labels/` even if its cached fingerprint already
+            matches the current inputs (see `convert_coco_to_yolo_labels`). Not needed
+            just to pick up changed/re-downloaded annotations or a `LABEL_FORMAT_VERSION`
+            bump — that's detected and handled automatically; this is an escape hatch
+            for forcing a rebuild anyway (e.g. while iterating on the conversion logic
+            itself, before bumping `LABEL_FORMAT_VERSION`).
 
     Returns:
         Path to the written `data.yaml`.
