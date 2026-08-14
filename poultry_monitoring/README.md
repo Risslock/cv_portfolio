@@ -18,6 +18,7 @@ Detecting and segmenting individual chickens in dense, overhead poultry farm ima
 - [Architecture](#architecture)
 - [Usage](#usage)
 - [Results](#results)
+- [Segmentation Results](#segmentation-results)
 - [Key Findings](#key-findings)
 - [Synthetic Copy-Paste Data Augmentation](#synthetic-copy-paste-data-augmentation)
 - [Portfolio Scope & Objectives](#portfolio-scope--objectives)
@@ -196,6 +197,30 @@ Two images from the **test split** — never used for training, tuning, or any v
 | ![Ground truth example 2: dense overhead flock, annotated boxes](docs/images/test_ground_truth_2.jpg) | ![Prediction example 2: dense overhead flock with detection boxes](docs/images/test_prediction_2.jpg) |
 
 56 ground-truth birds vs. 60 predicted in the first image, 42 vs. 44 in the second — close counts, and the extra predictions are mostly genuine partial birds at the frame edge that the model still caught. This is genuinely what "~23 birds/image, up to 50+" looks like at full resolution — the box density is the scene, not a rendering artifact.
+
+## Segmentation Results
+
+Phase 3 (instance segmentation) baselines — `yolo26n-seg` and `yolo26s-seg`, stock hyperparameters, no custom augmentation or unfreezing applied yet (that treatment comes later, mirroring the detection track):
+
+| Model | Split | Box P | Box R | Box mAP50 | Box mAP50-95 | Mask P | Mask R | Mask mAP50 | Mask mAP50-95 |
+|---|---|---|---|---|---|---|---|---|---|
+| `yolo26n-seg` (baseline) | val | 0.964 | 0.948 | 0.985 | 0.888 | 0.965 | 0.949 | 0.986 | 0.830 |
+| `yolo26n-seg` (ChickenVerse published) | val | — | — | — | — | — | — | 0.986 | 0.810 |
+| `yolo26s-seg` (baseline) | val | 0.961 | 0.954 | 0.987 | 0.894 | 0.962 | 0.956 | 0.989 | 0.848 |
+| `yolo26s-seg` (ChickenVerse published) | val | — | — | — | — | — | — | 0.989 | 0.825 |
+
+`yolo26s-seg` is ahead of `yolo26n-seg` on every mAP/mask metric above, as expected for the larger backbone; both of this project's checkpoints are also slightly ahead of ChickenVerse's own published mask mAP50-95 for the same architecture. Box/precision/recall aren't published for the ChickenVerse rows here — their table doesn't expose a directly comparable column for those, only for mask mAP (see `plan.md` for the same `val_`-column caveat that applies to the detection table above).
+
+### Sample Predictions
+
+Same held-out test frame (`frame_41_620.47s.jpg`), ground truth alongside both checkpoints' predictions — masks only, no boxes, each instance in a distinct random color, since a same-class box/label on every one of ~50 birds is noise, not signal. Predictions use `segmentation/yolo.py predict --masks-only` (`Results.plot(boxes=False, labels=False, color_mode="instance")`); ground truth uses `segmentation/visualize.py`'s label-rasterization helpers, so the two are rendered by different code paths and won't share a color mapping — only per-image instance count and shape are meant to be compared:
+
+| Ground truth | `yolo26n-seg` | `yolo26s-seg` |
+|---|---|---|
+| ![Ground-truth instance masks for frame_41, 45 annotated birds, no bounding boxes, each bird a distinct random color](docs/images/seg_ground_truth.jpg) | ![yolo26n-seg predicted instance masks on the same frame](docs/images/seg_prediction_n.jpg) | ![yolo26s-seg predicted instance masks on the same frame, more instances recovered](docs/images/seg_prediction_s.jpg) |
+
+- **`yolo26n-seg` misses a handful of birds that `yolo26s-seg` recovers** — most visibly a white/pale bird right at one of the feeder trays, unmasked in `n` and correctly picked up in `s`.
+- **Both models correctly detect a bird mostly hidden behind a support pole** (bottom-left corner) — at first glance this looked like a false positive on the bare pole/wire-tie, but the ground truth confirms a real, heavily-occluded bird annotated right at the pole base. Both `n` and `s` mask it, a good sign for occlusion handling given how central occlusion robustness is to this dataset.
 
 ## Key Findings
 
