@@ -24,7 +24,7 @@ from ultralytics import YOLO
 
 from poultry_monitoring.augmentation import detection as aug_detection
 from poultry_monitoring.augmentation import shared as aug_shared
-from poultry_monitoring.data.coco import prepare_data
+from poultry_monitoring.data.coco import CLASS_NAMES, prepare_data
 from poultry_monitoring.mlflow_utils import (
     DETECTION_EXPERIMENT,
     configure_ultralytics_mlflow,
@@ -33,7 +33,6 @@ from poultry_monitoring.mlflow_utils import (
 )
 
 SEED = 42
-CLASS_NAMES = {0: "Chicken"}
 # Precision/recall trade-off, picked off the F1 curve in notebook 02 — lower favors
 # recall (fewer missed birds), higher favors precision (fewer double-counts).
 DEFAULT_CONF_THRESHOLD = 0.36
