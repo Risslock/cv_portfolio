@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, or the domain-aware synthetic copy-paste
+  augmentation method it implements, please cite it as below.
+title: >-
+  Poultry Monitoring: domain-aware synthetic copy-paste augmentation for
+  dense instance segmentation
+authors:
+  - family-names: Betancur
+    given-names: Juan Esteban
+repository-code: "https://github.com/Risslock/cv_portfolio"
+license: AGPL-3.0-or-later
+type: software
+keywords:
+  - instance-segmentation
+  - object-detection
+  - data-augmentation
+  - synthetic-data
+  - copy-paste-augmentation
+  - precision-livestock-farming
+  - computer-vision
+  - YOLO
+abstract: >-
+  Object detection and instance segmentation of individual chickens in dense,
+  high-occlusion overhead poultry imagery, together with a domain-aware
+  synthetic copy-paste augmentation pipeline for dense instance segmentation.
+
+  This is an engineering contribution rather than a new technique: it builds on
+  established context-aware copy-paste augmentation (Ghiasi et al., CVPR 2021)
+  and Reinhard-style statistical colour transfer (Reinhard et al., 2001), with a
+  domain-specific parameterization for flock imagery. Curated, unoccluded
+  instance cutouts are composited into training scenes on the fly. A pasted
+  instance's size is drawn from a Normal distribution fitted to the target
+  scene's own instance-size distribution — an alternative to the depth- or
+  perspective-derived scaling used elsewhere in the literature — motivated by
+  how a real cohort's weight, and therefore apparent size, spreads out as it
+  ages. Colour and size statistics are pooled spatially locally, from real
+  instances within a radius of the paste location, in LAB space; placement is
+  rejection-sampled against an occupancy map so pastes do not bury existing
+  instances.
+
+  The pipeline is dataset-agnostic and framework-independent at its core; the
+  implementation here is demonstrated on the ChickenVerse dataset and integrated
+  into an Ultralytics YOLO26 training loop. The repository also documents the
+  implementation findings in full, including negative results and several
+  silent-corruption bugs found along the way.
