@@ -22,3 +22,4 @@ instead of inlining the full rationale — see `docs/adr/template.md` for the fo
 | [0014](0014-copy-paste-donor-bank-design.md) | Curated, disk-cached (PNG pair) donor bank for synthetic copy-paste, with scene-relative Normal(mean, std) resizing |
 | [0015](0015-color-aware-donor-compositing.md) | LAB-space statistical color transfer (Reinhard-style) to match a pasted donor's color to the target scene's own birds |
 | [0016](0016-fingerprinted-label-cache-invalidation.md) | Fingerprint (name/size/mtime + format version) the polygon annotation cache and `labels/`, not existence-only — an existence check silently served a stale `labels/` past a conversion-logic fix |
+| [0017](0017-training-time-copy-paste-augmentation.md) | Copy-paste runs per-sample inside the training loop (custom transform + dataset + trainer), not as a materialized dataset; scene stats made spatially local; three bugs found along the way |
