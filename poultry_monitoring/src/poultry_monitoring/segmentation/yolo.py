@@ -2,12 +2,15 @@
 
 Single-run training and inference for YOLO segmentation models.
 Related tools: `segmentation/preprocessing_eval.py` for test-time preprocessing,
-`segmentation/visualize.py` for training/label/prediction visualizations.
+`segmentation/visualize.py` for training/label/prediction visualizations,
+`segmentation/synthetic_data.py` for building a Phase 3 Stage B data yaml (pass it to
+`train`'s `--data-yaml`).
 """
 
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 from ultralytics import YOLO
@@ -106,6 +109,9 @@ def train(
     freeze: int = DEFAULT_FREEZE,
     data_source: str = "real",
     resume_from: Path | None = None,
+    copy_paste_bank: Path | None = None,
+    copy_paste_p: float = 0.3,
+    copy_paste_max_donors: int = 5,
 ) -> TrainOutcome:
     """Fine-tune a YOLO26-seg checkpoint, validate the best epoch, and log both to MLflow.
 
@@ -147,6 +153,12 @@ def train(
             priority over every other training-shape arg above (`epochs`, `patience`,
             `batch`, `fraction`, `imgsz`, `workers`, `freeze`), which Ultralytics
             re-reads from the interrupted run's own saved args instead.
+        copy_paste_bank: Curated donor bank directory. When given, training samples get
+            synthetic instances pasted in on the fly (`segmentation.copy_paste_training`)
+            — the Phase 3 Stage B treatment. `None` trains on real data only, byte-for-byte
+            the stock path.
+        copy_paste_p: Probability of pasting into a given training sample.
+        copy_paste_max_donors: Inclusive upper bound on donors pasted per sample.
 
     Returns:
         The best checkpoint's path and validation metrics (box + mask).
@@ -158,7 +170,17 @@ def train(
         model = YOLO(str(Path(resume_from).resolve()))
         results = model.train(resume=True)
     else:
-        train_kwargs = {} if workers is None else {"workers": workers}
+        train_kwargs: dict[str, Any] = {} if workers is None else {"workers": workers}
+        if copy_paste_bank is not None:
+            # Custom trainer, not a model.train() kwarg: the bank settings can't be cfg
+            # overrides (get_cfg rejects unknown keys) -- see copy_paste_training.py.
+            from poultry_monitoring.segmentation.copy_paste_training import (
+                make_donor_bank_trainer,
+            )
+
+            train_kwargs["trainer"] = make_donor_bank_trainer(
+                Path(copy_paste_bank).resolve(), p=copy_paste_p, max_donors=copy_paste_max_donors
+            )
         model = YOLO(f"{model_name}.pt")
         results = model.train(
             data=str(Path(data_yaml).resolve()),
@@ -187,8 +209,17 @@ def train(
 
     scale = model_name.removeprefix("yolo26").removesuffix("-seg")
     make_run_name(model_family="yolo26-seg", variant=f"{scale}-{variant}")
+    extra_params = {"model_family": "yolo26-seg", "variant": variant, "model_name": model_name}
+    if copy_paste_bank is not None:
+        # Logged so a Stage B run records the augmentation strength it actually used --
+        # these aren't Ultralytics args, so its native MLflow integration can't see them.
+        extra_params |= {
+            "copy_paste_bank": str(copy_paste_bank),
+            "copy_paste_p": copy_paste_p,
+            "copy_paste_max_donors": copy_paste_max_donors,
+        }
     finish_run(
-        extra_params={"model_family": "yolo26-seg", "variant": variant, "model_name": model_name},
+        extra_params=extra_params,
         extra_tags={"data_source": data_source},
         extra_metrics=metrics,
     )
@@ -289,6 +320,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="real",
         help="Tags the MLflow run -- Phase 3 Stage A (real) vs. Stage B (synthetic).",
     )
+    train_parser.add_argument(
+        "--copy-paste-bank",
+        type=Path,
+        default=None,
+        help="Curated donor bank dir -- enables on-the-fly synthetic copy-paste "
+        "(Phase 3 Stage B). Omit for a real-data-only run.",
+    )
+    train_parser.add_argument("--copy-paste-p", type=float, default=0.3)
+    train_parser.add_argument("--copy-paste-max-donors", type=int, default=5)
+    train_parser.add_argument(
+        "--data-yaml",
+        type=Path,
+        default=None,
+        help="Use this data yaml directly instead of regenerating labels/chickendet.yaml "
+        "from --data-dir's raw COCO annotations -- e.g. a Stage B chickendet_stage_b.yaml "
+        "from `segmentation.synthetic_data`'s `generate` CLI.",
+    )
 
     predict_parser = subparsers.add_parser(
         "predict", help="Run a trained -seg checkpoint on images."
@@ -385,7 +433,11 @@ def main() -> None:
 
     data_dir = args.data_dir.resolve()
     project = data_dir / "YOLO"
-    data_yaml = prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
+    data_yaml = (
+        args.data_yaml.resolve()
+        if args.data_yaml is not None
+        else prepare_data(data_dir, CLASS_NAMES, force_relabel=args.force_relabel)
+    )
     outcome = train(
         data_yaml,
         project,
@@ -400,6 +452,9 @@ def main() -> None:
         freeze=args.freeze,
         data_source=args.data_source,
         resume_from=args.resume_from,
+        copy_paste_bank=args.copy_paste_bank,
+        copy_paste_p=args.copy_paste_p,
+        copy_paste_max_donors=args.copy_paste_max_donors,
     )
     print(outcome)
 
