@@ -25,6 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pycocotools.mask as mask_utils
+from pycocotools.coco import COCO
 from ultralytics.data.converter import convert_coco
 
 # Shared dataset schema, not task logic (constitution Principle III) -- both
@@ -337,28 +338,63 @@ def convert_coco_to_yolo_labels(
     return labels_dir
 
 
-def build_data_yaml(data_dir: Path, class_names: dict[int, str], yaml_path: Path) -> Path:
+def build_data_yaml(
+    data_dir: Path,
+    class_names: dict[int, str],
+    yaml_path: Path,
+    train_splits: tuple[str, ...] = ("Train",),
+) -> Path:
     """Write the Ultralytics dataset YAML (image dirs + class names).
 
     Args:
         data_dir: Dataset root containing `images/Train`, `images/Validation`, etc.
         class_names: Mapping of class index to name, e.g. `{0: "Chicken"}`.
         yaml_path: Destination path for the YAML file.
+        train_splits: One or more `images/<split>` subdirectories to train on. A single
+            split (the default) writes `train` as a plain string; more than one writes
+            a list -- Ultralytics' dataset YAML supports either, so a Phase 3 Stage B
+            run can combine real + synthetic splits (e.g. `("Train", "TrainSynthetic")`)
+            without merging anything on disk. See `segmentation.synthetic_data`.
 
     Returns:
         `yaml_path`, unchanged, for convenient chaining.
     """
     import yaml
 
+    train = (
+        f"images/{train_splits[0]}"
+        if len(train_splits) == 1
+        else [f"images/{split}" for split in train_splits]
+    )
     data_yaml = {
         "path": str(data_dir),
-        "train": "images/Train",
+        "train": train,
         "val": "images/Validation",
         "names": class_names,
     }
     with yaml_path.open("w") as f:
         yaml.safe_dump(data_yaml, f)
     return yaml_path
+
+
+def coco_category_id_to_yolo_class_id(coco: COCO) -> dict[int, int]:
+    """Map each COCO category id to the YOLO class index `convert_coco` assigns it.
+
+    `convert_coco` (with this project's `cls91to80=False`) enumerates `categories`
+    sorted by id and assigns YOLO class indices 0, 1, 2, ... in that order. Code that
+    only has a raw COCO category id -- e.g. the copy-paste donor bank, which stores
+    `ann["category_id"]` straight from the source COCO annotations -- needs this map to
+    translate into the 0-indexed class id real YOLO-seg label files actually use.
+    Mismatching the two silently mislabels a pasted donor.
+
+    Args:
+        coco: COCO object holding the categories to map.
+
+    Returns:
+        Dict of `{coco_category_id: yolo_class_id}`.
+    """
+    category_ids = sorted(cat["id"] for cat in coco.loadCats(coco.getCatIds()))
+    return {coco_id: yolo_id for yolo_id, coco_id in enumerate(category_ids)}
 
 
 def prepare_data(data_dir: Path, class_names: dict[int, str], force_relabel: bool = False) -> Path:

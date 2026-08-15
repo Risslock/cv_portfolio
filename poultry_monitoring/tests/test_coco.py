@@ -12,12 +12,14 @@ import numpy as np
 import pycocotools.mask as mask_utils
 import pytest
 import yaml
+from pycocotools.coco import COCO
 
 from poultry_monitoring.data.coco import (
     _convert_rle_to_polygons_in_json,
     _decode_rle_mask,
     build_data_yaml,
     cache_polygon_annotations,
+    coco_category_id_to_yolo_class_id,
     convert_coco_to_yolo_labels,
     fix_iscrowd_field,
 )
@@ -338,3 +340,29 @@ class TestBuildDataYaml:
             "val": "images/Validation",
             "names": {0: "Chicken"},
         }
+
+    def test_multiple_train_splits_writes_a_list(self, tmp_path):
+        data_dir = tmp_path / "ChickenDet"
+        yaml_path = tmp_path / "chickendet_stage_b.yaml"
+
+        build_data_yaml(
+            data_dir, {0: "Chicken"}, yaml_path, train_splits=("Train", "TrainSynthetic")
+        )
+
+        written = yaml.safe_load(yaml_path.read_text())
+        assert written["train"] == ["images/Train", "images/TrainSynthetic"]
+
+
+class TestCocoCategoryIdToYoloClassId:
+    def test_maps_sorted_category_ids_to_sequential_yolo_indices(self, tmp_path):
+        coco_json = {
+            "images": [],
+            "annotations": [],
+            "categories": [{"id": 1, "name": "Chicken"}],
+        }
+        annotations_path = tmp_path / "instances.json"
+        annotations_path.write_text(json.dumps(coco_json))
+
+        mapping = coco_category_id_to_yolo_class_id(COCO(str(annotations_path)))
+
+        assert mapping == {1: 0}
