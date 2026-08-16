@@ -17,8 +17,13 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 ## Table of Contents
 
 - [Dataset](#dataset)
-- [Results](#results)
 - [Synthetic Copy-Paste Augmentation](#synthetic-copy-paste-augmentation)
+- [Results](#results)
+  - [Detection](#detection)
+  - [Instance Segmentation](#instance-segmentation)
+  - [Held-Out Test Split](#held-out-test-split)
+  - [The effect scales with scene density](#the-effect-scales-with-scene-density)
+  - [Sample Predictions](#sample-predictions)
 - [Usage](#usage)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
@@ -38,6 +43,28 @@ Released under **CC BY-NC-SA 4.0** and used here strictly for non-commercial, ed
 
 > A. Amirivojdan et al., *"ChickenVerse: An Open Large-Scale Multi-Task Dataset for Chicken Detection, Segmentation, and Behavior Recognition,"* University of Tennessee. [doi.org/10.2139/ssrn.7232911](https://doi.org/10.2139/ssrn.7232911)
 
+## Synthetic Copy-Paste Augmentation
+
+Pasting real, curated bird cutouts into training images to control density and occlusion directly, rather than being limited to whatever density the dataset happened to capture. Runs **inside the training loop** — donors are redrawn every epoch and nothing is written to disk.
+
+<p align="center">
+  <img src="docs/images/synthetic_copy_paste_before_after.png" width="800" alt="Before and after: a dense training image with 22 real chicken instances, and the same image with 8 synthetic instances pasted in">
+</p>
+
+- **Curated donor bank** — occluded and frame-truncated birds are filtered out *before* caching. 26,998 of the Train split's 116,329 annotations pass; 2,000 are cached as browsable PNG image + mask pairs.
+- **Overlap-aware placement** — rejection-sampled, so a paste doesn't bury a bird that's already there.
+- **Donor-side augmentation** — flip plus full 360° rotation, since overhead imagery has no canonical "up".
+- **Domain-aware resize** — each pasted bird's size is drawn from *that scene's own* instance-size distribution, modelling how a real flock's weight (and so apparent size) spreads as it ages.
+- **Color-aware compositing** — donors are matched to the target scene's own birds in LAB space, since a donor from one facility's lighting can otherwise carry a visible color cast.
+
+<p align="center">
+  <img src="docs/images/synthetic_copy_paste_color_matching.png" width="800" alt="Side by side: the same 8 synthetic instances pasted without color matching versus with LAB color matching to the scene's real birds">
+</p>
+
+Design rationale and rejected alternatives are in [ADR 0014](docs/adr/0014-copy-paste-donor-bank-design.md) (donor bank, scene-relative resize), [ADR 0015](docs/adr/0015-color-aware-donor-compositing.md) (color transfer) and [ADR 0017](docs/adr/0017-training-time-copy-paste-augmentation.md) (training-time integration). This is an engineering contribution rather than a new technique — see [Engineering Notes](docs/engineering-notes.md) for the prior art it builds on.
+
+Whether it actually helps — and the model size where it does the opposite — is measured in [Results](#results) below.
+
 ## Results
 
 Unless a table says otherwise, numbers are validation-split metrics from an explicit `model.val()` pass after training. **The test split was never used for tuning or comparison decisions** — it was evaluated exactly once, after every decision below was already fixed. See [Held-Out Test Split](#held-out-test-split).
@@ -55,7 +82,7 @@ Unless a table says otherwise, numbers are validation-split metrics from an expl
 
 ### Instance Segmentation
 
-Deliberately simpler than the detection track — stock Ultralytics config throughout, no search — so that one question stays cleanly answerable: **does synthetic copy-paste help, as the only changed variable?**
+Deliberately simpler than the detection track — stock Ultralytics config throughout, no search — so that one question stays cleanly answerable: **does [synthetic copy-paste](#synthetic-copy-paste-augmentation) help, as the only changed variable?**
 
 | Model | Box mAP50 | Box mAP50-95 | Mask mAP50 | Mask mAP50-95 |
 |---|---|---|---|---|
@@ -104,7 +131,16 @@ Validation's *densest* frame holds 36 birds — below the test split's *median* 
 
 The copy-paste result reproduces on this unseen data: box mAP50-95 **+1.66** on `yolo26n-seg` and **−0.90** on `yolo26s-seg`, the same directions found on validation. The gain on `n` is *larger* here than on validation, which is what an augmentation built to manufacture density should do when the evaluation gets denser.
 
-#### The effect scales with scene density
+Precision and recall move in mirror image, which the mAP columns hide — percentage points, real → real + synthetic:
+
+| | Box precision | Box recall | Mask precision | Mask recall |
+|---|---|---|---|---|
+| `yolo26n-seg` | **+1.31** | −0.59 | **+1.60** | −0.23 |
+| `yolo26s-seg` | −1.49 | **+0.38** | −1.18 | **+0.40** |
+
+On `n`, copy-paste buys precision at recall's expense; on `s` it does the reverse. That matters for picking a checkpoint, because the downstream tasks are not symmetric: for counting and mortality tracking a missed bird is a silent undercount, while a false positive shows up as an implausible headcount. On that criterion `yolo26s-seg` + copy-paste is the pick — it has the best mask recall (0.905) and the best mask mAP50-95 (0.727) of any arm — even though the plain `s` baseline wins on box mAP50-95.
+
+### The effect scales with scene density
 
 The single aggregate number per model hides the most useful pattern. Splitting the test split into equal-size thirds by each image's own bird count, and re-scoring every checkpoint per bin:
 
@@ -120,15 +156,6 @@ The single aggregate number per model hides the most useful pattern. Splitting t
 Both trends are monotonic in density, in opposite directions. On `yolo26n-seg` synthetic data helps, and **helps more the more crowded the scene** — which is the behaviour you would want from an augmentation whose purpose is manufacturing density. On `yolo26s-seg` it hurts, and the damage is almost entirely in the dense third; in sparse frames it is harmless.
 
 Why the larger model responds the opposite way is not something this project chased down — it is stated as observed, not explained.
-
-Precision and recall move in mirror image, which the mAP columns hide — percentage points, real → real + synthetic:
-
-| | Box precision | Box recall | Mask precision | Mask recall |
-|---|---|---|---|---|
-| `yolo26n-seg` | **+1.31** | −0.59 | **+1.60** | −0.23 |
-| `yolo26s-seg` | −1.49 | **+0.38** | −1.18 | **+0.40** |
-
-On `n`, copy-paste buys precision at recall's expense; on `s` it does the reverse. That matters for picking a checkpoint, because the downstream tasks are not symmetric: for counting and mortality tracking a missed bird is a silent undercount, while a false positive shows up as an implausible headcount. On that criterion `yolo26s-seg` + copy-paste is the pick — it has the best mask recall (0.905) and the best mask mAP50-95 (0.727) of any arm — even though the plain `s` baseline wins on box mAP50-95.
 
 Scope caveat: the test split is 250 frames from a single camera at one resolution. It is a good density-shift probe and a poor multi-site generalization test — the cross-facility question in [Applications & Deployment Realities](#applications--deployment-realities) is still open.
 
@@ -148,26 +175,6 @@ Test-split frames, never used for training or tuning. Boxes only for detection, 
 | ![Ground-truth instance masks, 45 annotated birds](docs/images/seg_ground_truth.jpg) | ![yolo26n-seg predicted instance masks](docs/images/seg_prediction_n.jpg) | ![yolo26s-seg predicted instance masks, more instances recovered](docs/images/seg_prediction_s.jpg) |
 
 `yolo26s-seg` recovers a few birds `n` misses; both correctly mask a bird almost entirely hidden behind a support pole. Colors are per-instance and random, so they don't correspond between panels.
-
-## Synthetic Copy-Paste Augmentation
-
-Pasting real, curated bird cutouts into training images to control density and occlusion directly, rather than being limited to whatever density the dataset happened to capture. Runs **inside the training loop** — donors are redrawn every epoch and nothing is written to disk.
-
-<p align="center">
-  <img src="docs/images/synthetic_copy_paste_before_after.png" width="800" alt="Before and after: a dense training image with 22 real chicken instances, and the same image with 8 synthetic instances pasted in">
-</p>
-
-- **Curated donor bank** — occluded and frame-truncated birds are filtered out *before* caching. 26,998 of the Train split's 116,329 annotations pass; 2,000 are cached as browsable PNG image + mask pairs.
-- **Overlap-aware placement** — rejection-sampled, so a paste doesn't bury a bird that's already there.
-- **Donor-side augmentation** — flip plus full 360° rotation, since overhead imagery has no canonical "up".
-- **Domain-aware resize** — each pasted bird's size is drawn from *that scene's own* instance-size distribution, modelling how a real flock's weight (and so apparent size) spreads as it ages.
-- **Color-aware compositing** — donors are matched to the target scene's own birds in LAB space, since a donor from one facility's lighting can otherwise carry a visible color cast.
-
-<p align="center">
-  <img src="docs/images/synthetic_copy_paste_color_matching.png" width="800" alt="Side by side: the same 8 synthetic instances pasted without color matching versus with LAB color matching to the scene's real birds">
-</p>
-
-Design rationale and rejected alternatives are in [ADR 0014](docs/adr/0014-copy-paste-donor-bank-design.md) (donor bank, scene-relative resize), [ADR 0015](docs/adr/0015-color-aware-donor-compositing.md) (color transfer) and [ADR 0017](docs/adr/0017-training-time-copy-paste-augmentation.md) (training-time integration). This is an engineering contribution rather than a new technique — see [Engineering Notes](docs/engineering-notes.md) for the prior art it builds on.
 
 ## Usage
 
