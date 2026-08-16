@@ -59,14 +59,14 @@ Deliberately simpler than the detection track — stock Ultralytics config throu
 
 | Model | Box mAP50 | Box mAP50-95 | Mask mAP50 | Mask mAP50-95 |
 |---|---|---|---|---|
-| `yolo26n-seg` (Stage A, real data) | 0.985 | 0.884 | 0.986 | 0.835 |
-| `yolo26n-seg` (Stage B, + copy-paste) | 0.989 | **0.896** | 0.989 | 0.835 |
+| `yolo26n-seg` (real data) | 0.985 | 0.884 | 0.986 | 0.835 |
+| `yolo26n-seg` (real + synthetic) | 0.989 | **0.896** | 0.989 | 0.835 |
 | `yolo26n-seg` (ChickenVerse published) | — | — | 0.986 | 0.810 |
-| `yolo26s-seg` (Stage A, real data) | 0.989 | **0.919** | 0.990 | 0.841 |
-| `yolo26s-seg` (Stage B, + copy-paste) | 0.988 | 0.912 | 0.988 | 0.836 |
+| `yolo26s-seg` (real data) | 0.989 | **0.919** | 0.990 | 0.841 |
+| `yolo26s-seg` (real + synthetic) | 0.988 | 0.912 | 0.988 | 0.836 |
 | `yolo26s-seg` (ChickenVerse published) | — | — | 0.989 | 0.825 |
 
-With every arm on a pinned optimizer ([ADR 0018](docs/adr/0018-pin-segmentation-optimizer.md)), copy-paste's effect **flips sign with model size** — percentage points, Stage A → Stage B:
+With every arm on a pinned optimizer ([ADR 0018](docs/adr/0018-pin-segmentation-optimizer.md)), copy-paste's effect **flips sign with model size** — percentage points, real → real + synthetic:
 
 | | Box mAP50-95 | Box recall | Mask mAP50-95 | Mask recall |
 |---|---|---|---|---|
@@ -83,12 +83,12 @@ Two caveats: single seed per arm, and the `n` and `s` ablations ran at different
 
 Everything above is validation. The test split stayed untouched until the ablation was finished, then all four segmentation checkpoints were evaluated on it once.
 
-| Model | Box mAP50-95 | Mask mAP50-95 |
-|---|---|---|
-| `yolo26n-seg` (Stage A, real data) | 0.754 | 0.702 |
-| `yolo26n-seg` (Stage B, + copy-paste) | 0.771 | 0.710 |
-| `yolo26s-seg` (Stage A, real data) | **0.805** | 0.724 |
-| `yolo26s-seg` (Stage B, + copy-paste) | 0.796 | **0.727** |
+| Model | Box P | Box R | Box mAP50 | Box mAP50-95 | Mask P | Mask R | Mask mAP50 | Mask mAP50-95 |
+|---|---|---|---|---|---|---|---|---|
+| `yolo26n-seg` (real data) | 0.903 | 0.891 | 0.948 | 0.754 | 0.903 | 0.891 | 0.947 | 0.702 |
+| `yolo26n-seg` (real + synthetic) | 0.916 | 0.885 | 0.949 | 0.771 | 0.919 | 0.888 | 0.951 | 0.710 |
+| `yolo26s-seg` (real data) | **0.928** | 0.900 | 0.961 | **0.805** | **0.928** | 0.901 | **0.961** | 0.724 |
+| `yolo26s-seg` (real + synthetic) | 0.913 | **0.904** | 0.961 | 0.796 | 0.916 | **0.905** | 0.959 | **0.727** |
 
 Every model drops 11–13 points against its own validation score. That gap is a property of how the splits were built, not evidence of overfitting:
 
@@ -101,6 +101,15 @@ Every model drops 11–13 points against its own validation score. That gap is a
 Validation's *densest* frame holds 36 birds — below the test split's *median* of 48. Density and occlusion are the whole difficulty of this dataset, so a validation split sitting at the sparse end reads optimistically, and the test figures are the better estimate of a crowded real scene.
 
 The copy-paste result reproduces on this unseen data: box mAP50-95 **+1.66** on `yolo26n-seg` and **−0.90** on `yolo26s-seg`, the same directions found on validation. The gain on `n` is *larger* here than on validation, which is what an augmentation built to manufacture density should do when the evaluation gets denser. Copy-paste also narrows the validation→test mask gap at both sizes (−12.50 vs. −13.33 on `n`; −10.82 vs. −11.66 on `s`) — it buys robustness to the density shift even where it doesn't raise the validation score.
+
+Precision and recall move in mirror image, which the mAP columns hide — percentage points, real → real + synthetic:
+
+| | Box precision | Box recall | Mask precision | Mask recall |
+|---|---|---|---|---|
+| `yolo26n-seg` | **+1.31** | −0.59 | **+1.60** | −0.23 |
+| `yolo26s-seg` | −1.49 | **+0.38** | −1.18 | **+0.40** |
+
+On `n`, copy-paste buys precision at recall's expense; on `s` it does the reverse. That matters for picking a checkpoint, because the downstream tasks are not symmetric: for counting and mortality tracking a missed bird is a silent undercount, while a false positive shows up as an implausible headcount. On that criterion `yolo26s-seg` + copy-paste is the pick — it has the best mask recall (0.905) and the best mask mAP50-95 (0.727) of any arm — even though the plain `s` baseline wins on box mAP50-95.
 
 Scope caveat: the test split is 250 frames from a single camera at one resolution. It is a good density-shift probe and a poor multi-site generalization test — the cross-facility question in [Applications & Deployment Realities](#applications--deployment-realities) is still open.
 
@@ -172,7 +181,7 @@ uv run python -m poultry_monitoring.detection.yolo predict --weights <path/to/be
 **Segmentation**
 
 ```bash
-# Stage A: real-data baseline
+# Train on real data only
 uv run python -m poultry_monitoring.segmentation.yolo train --data-dir data/ChickenDet \
     --model-name yolo26n-seg --variant baseline --epochs 100 --data-source real
 
@@ -182,7 +191,7 @@ uv run python -m poultry_monitoring.augmentation.segmentation build-bank \
     --img-dir data/ChickenDet/images/Train \
     --bank-dir data/ChickenDet/copy_paste_donor_bank --max-donors 2000 --seed 42
 
-# Stage B: same config + synthetic copy-paste as the only changed variable
+# Same config, with synthetic copy-paste as the only changed variable
 uv run python -m poultry_monitoring.segmentation.yolo train --data-dir data/ChickenDet \
     --model-name yolo26n-seg --variant synth_copy_paste --epochs 100 \
     --copy-paste-bank data/ChickenDet/copy_paste_donor_bank --data-source synthetic

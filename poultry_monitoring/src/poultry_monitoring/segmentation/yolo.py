@@ -378,14 +378,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--data-source",
         choices=["real", "synthetic"],
         default="real",
-        help="Tags the MLflow run -- Phase 3 Stage A (real) vs. Stage B (synthetic).",
+        help="Tags the MLflow run -- real data only vs. real + synthetic copy-paste.",
     )
     train_parser.add_argument(
         "--copy-paste-bank",
         type=Path,
         default=None,
         help="Curated donor bank dir -- enables on-the-fly synthetic copy-paste "
-        "(Phase 3 Stage B). Omit for a real-data-only run.",
+        "(real + synthetic). Omit for a real-data-only run.",
     )
     train_parser.add_argument("--copy-paste-p", type=float, default=0.3)
     train_parser.add_argument("--copy-paste-max-donors", type=int, default=5)
