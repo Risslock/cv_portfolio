@@ -74,7 +74,7 @@ Image augmentation (`RandomFlip`, `RandomRotation`, `RandomBrightness`, `RandomZ
 
 ### Configurable architecture
 
-The CNN builder supports tuning the number of conv blocks, number of dense blocks, kernel size, and the global pooling strategy (`max`, `avg`, or `flatten`), so different capacity/regularization trade-offs can be explored from the CLI without touching code.
+The CNN builder supports tuning the number of conv blocks, number of dense blocks, kernel size, the two dropout rates (conv-side and dense-side, set independently), and the global pooling strategy (`max`, `avg`, or `flatten`), so different capacity/regularization trade-offs can be explored from the CLI without touching code. The pooling strategy turned out to matter most — see [Results](#results).
 
 ## Getting Started
 
@@ -88,20 +88,21 @@ uv sync
 ### Training
 
 ```bash
+# Best known configuration — reproduces the 93.6% run in Results below
 uv run python -m fashion_mnist.train \
-  --epochs 100 \
+  --epochs 200 \
   --batch-size 512 \
   --learning-rate 0.001 \
-  --n-conv 4 \
-  --n-dense 2 \
+  --n-conv 5 \
+  --n-dense 3 \
   --global-pooling-type flatten \
   --horizontal-flip \
-  --rotation 0.1 \
-  --brightness 0.001 \
-  --zoom 0.1 \
-  --translation 0.1 \
+  --zoom 0.05 \
+  --translation 0.05 \
   --run-name baseline
 ```
+
+Everything else falls back to its default: `--kernel-size 3`, `--conv-dropout-rate 0.5`, `--dense-dropout-rate 0.2`, `--rotation 0.0`, `--brightness 0.0`, `--seed 42`, `--val-split 0.1`, plus the callback settings (`--early-stopping-patience 5`, `--lr-patience 3`, `--lr-factor 0.1`).
 
 `--run-name` is optional — MLflow auto-generates a human-readable name (e.g. `capable-shrike-728`) if omitted.
 
@@ -195,6 +196,45 @@ TensorFlow ≥2.11 has no native GPU support on Windows — it silently falls ba
 - Pixel values normalized to [0, 1]
 - Fixed random seed for reproducibility
 
+## Results
+
+Best run to date: **93.62% test accuracy** (macro F1 0.936) on the standard 10,000-image test set, from the production pipeline with GPU training in the Dev Container. For reference, the exploratory notebook prototype reached ~88.6%.
+
+All runs share `batch_size=512`, `learning_rate=0.001`, `seed=42`, Adam, and early stopping on validation loss; metrics are read from `mlflow.db`. **One run per configuration, no repeated seeds** — so no noise floor was measured here, and sub-1-point deltas below should be treated as unresolved rather than real. The larger effects are called out on that basis.
+
+### Architecture sweep
+
+Seven configurations, no augmentation, 100-epoch cap — so architecture is the only variable across the whole block:
+
+| Conv blocks | Dense blocks | Pooling | Test accuracy |
+|---|---|---|---|
+| 5 | 3 | `flatten` | **93.56%** |
+| 5 | 3 | `max` | 92.55% |
+| 6 | 2 | `max` | 92.44% |
+| 4 | 2 | `max` | 92.28% |
+| 4 | 3 | `max` | 91.68% |
+| 4 | 2 | `avg` | 90.92% |
+| 3 | 3 | `max` | 90.43% |
+
+- **`flatten` beats global pooling**, and it's the largest architectural effect here: +1.01 points over `max` at identical 5-conv/3-dense depth, and `max` in turn is +1.36 over `avg` at 4-conv/2-dense. On 28×28 inputs the final feature map is small enough that flattening preserves spatial layout that global pooling averages away — the usual case for global pooling assumes larger maps and a parameter count worth cutting, neither of which applies at this scale.
+- **Depth helps, then plateaus** — at `max` pooling, 3 → 4 → 5 conv blocks climbs 90.43% → 92.28% → 92.55%, but 6 blocks (92.44%) does not continue the trend.
+
+### Augmentation: the clearest result, and it's negative
+
+Three runs at 200 epochs with a horizontal flip and mild (0.05) zoom/translation isolate rotation and pooling one at a time:
+
+| Conv/Dense | Pooling | Rotation | Test accuracy | Δ vs. row above |
+|---|---|---|---|---|
+| 5 / 3 | `flatten` | 0.0 | **93.62%** | — |
+| 5 / 3 | `flatten` | 0.1 | 90.52% | **−3.10** |
+| 5 / 3 | `max` | 0.1 | 88.02% | **−2.50** |
+
+**Rotation is actively harmful** — 0.1 (±10%) costs 3.10 points against an otherwise byte-identical run, the largest single effect measured in this project and comfortably beyond anything a seed difference would plausibly explain. Fashion MNIST items are centered, upright, and consistently scaled by construction, so rotation manufactures poses that never appear at test time and spends model capacity on them. The second row-pair independently reproduces the pooling finding from the sweep above, at +2.50 for `flatten`.
+
+The uncomfortable corollary: **augmentation bought essentially nothing overall.** The best augmented run (93.62%, flip + mild zoom/translation, 200 epochs) beats the best un-augmented one (93.56%, no augmentation at all, 100 epochs) by 0.06 points — noise, by any reasonable standard, for twice the training budget. This dataset is large, balanced, and low-variance enough that the augmentations available here have little left to add, and the one aggressive setting tried made things distinctly worse.
+
 ## Status
 
-🚧 **In Progress** — notebook prototype complete (~88.6% test accuracy); production pipeline (`src/fashion_mnist/`) in development.
+✅ **Production pipeline complete.** `src/fashion_mnist/` (data, augmentation, model, train, evaluate, MLflow utils) is built and in use, with 11 completed runs tracked (one a 1-epoch smoke test) and the GPU Dev Container verified end-to-end.
+
+Not planned, but the honest next steps: **repeated seeds per configuration**, to establish a noise floor and settle whether the ~1-point pooling deltas are real — the rotation and `flatten`-vs-`max` effects are large enough to survive that scrutiny, the depth ordering probably isn't. After that, a proper hyperparameter search rather than a hand-driven sweep.
