@@ -1,0 +1,77 @@
+Poultry Monitoring — object detection & instance segmentation on ChickenVerse
+Copyright (C) 2026 Juan Esteban Betancur
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+IMPORTANT — NON-COMMERCIAL RESTRICTIONS ON DATA, DONOR BANK, AND TRAINED WEIGHTS
+================================================================================
+
+The AGPL-3.0 above covers the SOURCE CODE in this repository. It does NOT and
+cannot relicense the dataset this project is built on, or artifacts derived from
+that dataset. Those carry their own, stricter terms:
+
+  ChickenVerse (ChickenDet subset)
+  https://github.com/amirivojdan/ChickenVerse — https://zenodo.org/records/20672799
+  Licensed CC BY-NC-SA 4.0 (Attribution — NonCommercial — ShareAlike)
+
+Because CC BY-NC-SA 4.0 is a non-commercial, share-alike license, the following
+are restricted to NON-COMMERCIAL use (academic research, education, personal
+study, and portfolio/demonstration purposes), require attribution to the
+ChickenVerse authors, and must be shared under the same license:
+
+  * The ChickenVerse images and annotations themselves.
+  * The curated copy-paste donor bank (data/ChickenDet/copy_paste_donor_bank/) —
+    it consists of image crops taken directly from ChickenVerse images.
+  * Any model weights trained on ChickenVerse, and any composited/synthetic
+    images produced from it.
+
+None of these artifacts are distributed in this repository (all are gitignored
+and regenerated locally), but the restriction travels with them wherever they
+are produced or shared.
+
+In short: the code is AGPL-3.0 (copyleft, including over a network — see AGPL
+§13); the data and anything derived from it is non-commercial. Commercial use of
+this project as a whole is therefore not permitted without separate permission
+from the ChickenVerse authors, and would additionally require complying with the
+AGPL for the code (or obtaining a commercial license from Ultralytics for their
+component — see below).
+
+If you use the ChickenVerse dataset, cite the original work:
+
+  A. Amirivojdan et al., "ChickenVerse: An Open Large-Scale Multi-Task Dataset
+  for Chicken Detection, Segmentation, and Behavior Recognition," University of
+  Tennessee. https://doi.org/10.2139/ssrn.7232911
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+This project depends on, and integrates closely with, the following. Their
+licenses apply to their own code:
+
+  Ultralytics YOLO ......... AGPL-3.0  (https://ultralytics.com/license)
+  PyTorch .................. BSD-3-Clause
+  Albumentations ........... MIT
+  pycocotools .............. BSD (FreeBSD)
+  MLflow ................... Apache-2.0
+
+This project is licensed AGPL-3.0 in large part because Ultralytics is AGPL-3.0
+and this code subclasses its `YOLODataset` and `SegmentationTrainer` — a combined
+work. AGPL-3.0 §10 forbids imposing further restrictions (such as a
+non-commercial clause) on AGPL-covered code, which is why the non-commercial
+terms above attach to the dataset and its derivatives rather than to the source.
+Ultralytics offers a separate Enterprise license for commercial use that does not
+require AGPL compliance.
+
+This notice is provided for clarity and is not legal advice.

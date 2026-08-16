@@ -38,7 +38,9 @@ occluded fragment onto a new image looks obviously wrong, not like added density
      unlike `min_area_ratio` above. (Started at 2px.)
 2. **Store the curated bank as one PNG image + one PNG mask per donor**, on disk
    (`data/ChickenDet/copy_paste_donor_bank/`, persistent cache + `manifest.json`), not `.npz`, COCO
-   json, or YOLO polygon labels.
+   json, or YOLO polygon labels. Images and masks live in separate `images/`/`masks/` subfolders
+   with matching basenames (`images/<donor_id>.png` / `masks/<donor_id>.png`), not co-mingled in one
+   flat directory — the layout most ML/CV tooling expects (production code, `BANK_FORMAT_VERSION` 2).
 3. **Resize each pasted donor toward the *target scene's own* instance-size distribution**, not a
    fixed jitter range or the donor's native pixel scale. `sample_domain_scale_factor` draws a
    reference size from `Normal(mean, std)` fit to the target image's own instances
@@ -74,6 +76,30 @@ occluded fragment onto a new image looks obviously wrong, not like added density
   worth revisiting if production realism ever demands it: track std per camera installation, or
   condition it on flock age/production stage, instead of recomputing from one image's own noisy
   sample every time. Not needed yet.
+
+- **Production note — the bank is condition-blind, and that matters more in deployment than it
+  does here.** Not planned for this project; recorded for anyone taking this to a real
+  installation. The manifest stores only `donor_id`, `category_id`, `h`, `w`. It records nothing
+  about *when* or *where* a donor was harvested, so every donor is treated as equally
+  representative of every target scene.
+
+  That is tolerable for a fixed research dataset. It is a weaker assumption in production,
+  because the largest sources of appearance variation are time-varying *within a single house*:
+  curtain and lighting management, daylight shifting across the day, and birds changing
+  substantially in size and plumage across a ~6-week grow-out. A bank harvested continuously at
+  one site therefore mixes week-2 chicks under open curtains with week-5 birds under artificial
+  light, and the scene-relative resize and colour transfer are left carrying all of that
+  correction on their own.
+
+  Two cheap mitigations, in rough order of effort:
+  - **Record harvest metadata** (timestamp, flock age / days-since-placement, camera id) at
+    `build_donor_bank` time. ChickenVerse filenames already embed a timestamp
+    (`2022_09_24_11_06_46.594_...`), so capturing it costs almost nothing and at minimum makes a
+    bad match diagnosable after the fact.
+  - **Condition donor sampling on it** — prefer donors from a similar flock age and time of day
+    to the target frame, letting the colour/size transfer handle the residual rather than the
+    whole gap. This also supplies the per-installation / per-production-stage size spread the
+    bullet above asks for, instead of re-estimating it from one noisy frame.
 - **Color/lighting harmonization was flagged here as not yet handled — since fixed.** ChickenVerse
   spans 5 facilities with different lighting, and a donor pulled from one facility's conditions could
   visibly clash with a target scene from another. Addressed by a LAB-space statistical color transfer

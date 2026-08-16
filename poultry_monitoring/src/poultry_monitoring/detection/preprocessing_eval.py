@@ -107,15 +107,17 @@ def build_preprocessors_from_spec(
     return result
 
 
-def _write_preprocessed_validation_split(
+def write_preprocessed_validation_split(
     data_dir: Path, dest_dir: Path, preprocess: Callable[[np.ndarray], np.ndarray]
 ) -> None:
     """Write a `preprocess`-transformed copy of `images/Validation` + its labels under `dest_dir`.
 
-    Labels are copied unchanged — none of `TEST_TIME_PREPROCESSORS` are spatial, so boxes
-    don't move. A full copy (not a symlink) because Ultralytics resolves a split's label
-    directory by swapping `images` for `labels` in its *own* path, which wouldn't find the
-    original `labels/Validation` if `dest_dir` used a different split folder name.
+    Labels are copied unchanged — none of `TEST_TIME_PREPROCESSORS` are spatial, so
+    boxes/polygons don't move. A full copy (not a symlink) because Ultralytics resolves
+    a split's label directory by swapping `images` for `labels` in its *own* path,
+    which wouldn't find the original `labels/Validation` if `dest_dir` used a different
+    split folder name. Task-agnostic (label content is never inspected, just copied) —
+    reused as-is by `segmentation/preprocessing_eval.py`, not duplicated.
     """
     src_images, src_labels = data_dir / "images" / "Validation", data_dir / "labels" / "Validation"
     dst_images, dst_labels = dest_dir / "images" / "Validation", dest_dir / "labels" / "Validation"
@@ -183,7 +185,7 @@ def evaluate_test_time_preprocessing(
     }
     for name, preprocess in preprocessors.items():
         variant_dir = project / "ttp" / name
-        _write_preprocessed_validation_split(data_dir, variant_dir, preprocess)
+        write_preprocessed_validation_split(data_dir, variant_dir, preprocess)
         yaml_path = variant_dir / "data.yaml"
         # `train` key is required by Ultralytics' data-YAML schema but never read for a
         # val()-only call (only the active split's path is existence-checked) — points at

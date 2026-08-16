@@ -52,7 +52,7 @@ src/poultry_monitoring/
     shared.py           # task-agnostic: lighting/color jitter (build_domain_transforms)
     visualize.py         # before/after grids for shared.py's transforms — no torch import
     detection.py          # bbox-aware: occlusion simulation (CoarseDropout, boxes untouched)
-    segmentation.py        # mask-aware: copy-paste
+    segmentation.py        # mask-aware: copy-paste primitives + donor bank (framework-free)
   detection/
     yolo.py              # YOLO26 core: train/predict, TrainOutcome; also owns the unified CLI (imports tuning.py/preprocessing_eval.py locally inside main() — see docs/adr/0010)
     tuning.py             # multi-run strategies: tune/augtune/unfreeze/sweep, built on yolo.py's train()
@@ -60,6 +60,8 @@ src/poultry_monitoring/
     detr.py              # DETR detection train/predict wrappers (secondary/practice track)
   segmentation/
     yolo.py              # YOLO26-seg wrappers
+    copy_paste_training.py  # on-the-fly copy-paste: Ultralytics transform/dataset/trainer (ADR 0017)
+    synthetic_data.py       # offline synthetic-split materializer — documented fallback, not the default
     detr.py              # DETR (panoptic head) or Mask2Former wrappers; SAM stretch goal (see plan.md Future Work)
   export.py               # ONNX/LiteRT export, shared across task + model
   benchmark.py             # latency/throughput harness, shared
@@ -116,6 +118,10 @@ uv run python -m poultry_monitoring.detection.yolo augtune --data-dir <dir>     
 uv run python -m poultry_monitoring.detection.yolo train --data-dir <dir>        # fine-tune one size
 uv run python -m poultry_monitoring.detection.yolo sweep --data-dir <dir>         # tune, then train every size in --sizes
 uv run python -m poultry_monitoring.detection.yolo predict --weights <pt> --source <img>  # inference on custom images
+
+# synthetic copy-paste (Phase 3 Stage B) — build the donor bank once, then train with it
+uv run python -m poultry_monitoring.augmentation.segmentation build-bank --annotations <json> --img-dir <dir> --bank-dir <dir>
+uv run python -m poultry_monitoring.segmentation.yolo train --data-dir <dir> --copy-paste-bank <dir>  # on-the-fly, per sample
 
 # augmentation/visualize.py CLI — pure Albumentations/numpy, no torch import, safe to
 # run alongside a live GPU training job (unlike anything above, which all touch torch)
