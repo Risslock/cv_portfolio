@@ -11,7 +11,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 **Status:** 🟡 In progress.
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
-- 🟡 **Segmentation** — baselines trained for both sizes, both ahead of the published mask mAP50-95. A synthetic copy-paste variant is currently training.
+- ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size: box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`.
 - 🔲 **Next** — DETR as a secondary track, DALI data loading, ONNX/LiteRT export with latency benchmarks.
 
 ## Table of Contents
@@ -59,12 +59,25 @@ Deliberately simpler than the detection track — stock Ultralytics config throu
 
 | Model | Box mAP50 | Box mAP50-95 | Mask mAP50 | Mask mAP50-95 |
 |---|---|---|---|---|
-| `yolo26n-seg` (Stage A, real data) | 0.985 | 0.888 | 0.986 | **0.830** |
+| `yolo26n-seg` (Stage A, real data) | 0.985 | 0.884 | 0.986 | 0.835 |
+| `yolo26n-seg` (Stage B, + copy-paste) | 0.989 | **0.896** | 0.989 | 0.835 |
 | `yolo26n-seg` (ChickenVerse published) | — | — | 0.986 | 0.810 |
-| `yolo26s-seg` (Stage A, real data) | 0.987 | 0.894 | 0.989 | **0.848** |
+| `yolo26s-seg` (Stage A, real data) | 0.989 | **0.919** | 0.990 | 0.841 |
+| `yolo26s-seg` (Stage B, + copy-paste) | 0.988 | 0.912 | 0.988 | 0.836 |
 | `yolo26s-seg` (ChickenVerse published) | — | — | 0.989 | 0.825 |
 
-**Stage B** re-runs both sizes with copy-paste as the single changed variable, tagged `data_source=synthetic` in the same MLflow experiment. Currently training — results land here when it finishes, including if they come back flat or negative.
+With every arm on a pinned optimizer ([ADR 0018](docs/adr/0018-pin-segmentation-optimizer.md)), copy-paste's effect **flips sign with model size** — percentage points, Stage A → Stage B:
+
+| | Box mAP50-95 | Box recall | Mask mAP50-95 | Mask recall |
+|---|---|---|---|---|
+| `yolo26n-seg` | **+1.19** | +0.84 | −0.02 | +0.59 |
+| `yolo26s-seg` | **−0.72** | −1.20 | −0.54 | −1.37 |
+
+**Read the box column, not the mask column.** Mask mAP50-95 swings 0.2–0.8 points *between adjacent epochs* within a single run (0.95–2.82 points of spread across the last 20), so no mask delta here clears its own run's noise. Box mAP50-95 is much steadier at 0.1–0.5 points per epoch, which makes both box numbers readable — if only by a factor of a few.
+
+So copy-paste helps the nano model and hurts the small one. The plausible reading is capacity: `yolo26n-seg` is capacity-limited on this data and extra instances buy it something, while `yolo26s-seg` already fits the real distribution well enough that the composites' artifacts — clean cutout edges, no contact shadows — cost more than the added density is worth. The stopping behaviour points the same way: on `n`, copy-paste trained roughly twice as long before plateauing (75 epochs vs. 38); on `s` it stopped *earlier* (41 vs. 65).
+
+Two caveats: single seed per arm, and the `n` and `s` ablations ran at different batch sizes (16 vs. 8 — `s` plus the donor-bank trainer OOMs an 8GB card), though gradient accumulation holds the effective batch at 64 in both cases.
 
 ### Sample Predictions
 

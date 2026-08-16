@@ -125,6 +125,43 @@ this level of detail.
      surfacing as an opaque CUDA device-side assert. **Caught only by an end-to-end smoke
      run** — the unit-test fixture had pre-remapped the ids, so the tests were blind to it.
 
+- **An `epochs` cap you never reach can still change the optimizer**
+  ([ADR 0018](adr/0018-pin-segmentation-optimizer.md)) — `optimizer="auto"` selects on an
+  iteration count computed against `nbs` (64) rather than `batch`, so `ceil(5219/64) * epochs`
+  crosses its 10k threshold at `epochs > 122` on ChickenDet whether or not those epochs run.
+  Two copy-paste ablation arms differing *only* in their cap (200 vs. 100) therefore trained
+  on different optimizers — MuSGD at `lr0=0.01` vs. AdamW at `lr0=0.002`, ~20–40× apart.
+  `auto` also overrides `lr0`/`momentum`/`warmup_bias_lr` without writing them back, so
+  neither run's `args.yaml` described what actually trained; the optimizer had to be recovered
+  from the logged per-group LR traces (8 groups = MuSGD, 3 = AdamW).
+
+- **Copy-paste's effect flips sign with model size** — on matched optimizers, box mAP50-95
+  goes **+1.19 pp on `yolo26n-seg` but −0.72 pp on `yolo26s-seg`** (box recall +0.84 vs.
+  −1.20). Stopping behaviour agrees: on `n` copy-paste trained ~2× longer before plateauing
+  (75 epochs vs. 38), on `s` it stopped *earlier* (41 vs. 65). Plausible reading is capacity —
+  `n` is capacity-limited on this data and extra instances help, while `s` already fits the
+  real distribution well enough that compositing artifacts (clean cutout edges, no contact
+  shadows) cost more than added density is worth. A useful reminder that an augmentation
+  validated on one model size does not transfer to a larger one for free.
+
+- **Mask mAP50-95 is too noisy here to read small deltas** — it swings **0.2–0.8 pp between
+  adjacent epochs** within a single run (0.95–2.82 pp of spread over the last 20 epochs),
+  while box mAP50-95 moves only 0.1–0.5 pp/epoch and climbs near-monotonically. Any mask
+  conclusion below ~1 pp is inside its own run's noise band; an earlier read of "mask mAP75
+  −0.63 shows copy-paste doesn't improve boundaries" did not survive this check. Also why
+  `best.pt` can sit at a surprising epoch — Ultralytics selects on a combined box+mask
+  fitness, so the `yolo26s-seg` baseline kept training to epoch 65 while its best *mask*
+  mAP50-95 had occurred at epoch 8.
+
+- **Continuing a converged run with mosaic off didn't help** — the copy-paste run early-stopped
+  at epoch 75 of a 100-epoch cap, so `close_mosaic=10`'s mosaic-free final phase (due at epoch
+  91) never ran. Restarting from its `best.pt` for 25 mosaic-free epochs (`lr0=0.0007`, no
+  warmup, same donor bank and paste strength) regressed 8 of 9 metrics — only `box_map50_95`
+  improved (+0.45 pp), against `mask_map75 −0.75` and `mask_map50_95 −0.39`. Per-epoch mask
+  mAP50-95 never once beat the 0.8356 it inherited across all 25 epochs (best 0.834, epoch 8).
+  Read as: the model was already converged, and restarting the LR schedule and optimizer state
+  cost more than the cleaner mosaic-free distribution bought.
+
 - **Prior art, stated plainly** — the augmentation is an engineering contribution, not a new
   technique. Copy-paste for instance segmentation is
   [Ghiasi et al., CVPR 2021](https://arxiv.org/abs/2012.07177); statistical colour transfer

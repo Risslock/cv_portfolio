@@ -26,6 +26,21 @@ from poultry_monitoring.mlflow_utils import (
 SEED = 42
 
 DEFAULT_FREEZE = 0
+
+# Pinned explicitly instead of leaving Ultralytics' `optimizer="auto"`, which selects on
+# iteration count computed against `nbs` (64) rather than `batch` -- ceil(len(train)/64)
+# * epochs -- and flips MuSGD -> AdamW below 10k iterations. On ChickenDet (5,219 train
+# images) that threshold lands at `epochs > 122`, so the `epochs` cap alone silently
+# decided the optimizer: the 200-epoch baseline trained on MuSGD/lr0=0.01 while the
+# 100-epoch copy-paste run trained on AdamW/lr0=0.002, wrecking an ablation meant to
+# differ only in copy-paste. These four values reproduce what `auto` actually chose for
+# the 100-epoch run -- note `auto` *ignores* args' own lr0/momentum/warmup_bias_lr, so
+# a run's saved args.yaml does not describe the optimizer it trained with.
+# See docs/adr/0018-pin-segmentation-optimizer.md.
+DEFAULT_OPTIMIZER = "AdamW"
+DEFAULT_LR0 = 0.002  # == auto's lr_fit, round(0.002 * 5 / (4 + nc), 6), at nc=1
+DEFAULT_MOMENTUM = 0.9  # auto's value, not args' own 0.937 default
+DEFAULT_WARMUP_BIAS_LR = 0.0  # auto zeroes this for Adam-family optimizers
 # ChickenVerse doesn't report an F1-curve-derived operating point for segmentation (or
 # use one) -- unlike detection/yolo.py's DEFAULT_CONF_THRESHOLD, these are just
 # Ultralytics' own predict() defaults, not re-derived for this model. Revisit once
@@ -108,7 +123,9 @@ def train(
     workers: int | None = None,
     freeze: int = DEFAULT_FREEZE,
     data_source: str = "real",
+    hyperparameters: dict | None = None,
     resume_from: Path | None = None,
+    weights_path: Path | None = None,
     copy_paste_bank: Path | None = None,
     copy_paste_p: float = 0.3,
     copy_paste_max_donors: int = 5,
@@ -148,11 +165,23 @@ def train(
             disclosure). Doesn't change training behavior itself; whether `data_yaml`
             actually points at synthetic-augmented data is the caller's job (Stage B's
             data pipeline, not yet built).
+        hyperparameters: Extra `model.train()` kwargs, merged over the pinned optimizer
+            defaults (`DEFAULT_OPTIMIZER`/`DEFAULT_LR0`/`DEFAULT_MOMENTUM`/
+            `DEFAULT_WARMUP_BIAS_LR`) so a caller can override them — e.g. `mosaic=0.0`
+            for a mosaic-off continuation, or a lower `lr0` when starting from an
+            already-converged checkpoint. Ignored when `resume_from` is given.
         resume_from: Path to an interrupted run's `weights/last.pt` — resumes it to
             completion instead of starting fresh (e.g. after an OOM crash). Takes
             priority over every other training-shape arg above (`epochs`, `patience`,
             `batch`, `fraction`, `imgsz`, `workers`, `freeze`), which Ultralytics
             re-reads from the interrupted run's own saved args instead.
+        weights_path: Start from these weights instead of a stock `f"{model_name}.pt"`
+            (`model_name` then only feeds MLflow naming). Unlike `resume_from`, this is a
+            *fresh* run — new output dir, new MLflow run, and this call's own args apply —
+            so the source run's artifacts are never reopened for writing. The intended use
+            is a continuation with deliberately different args, e.g. a mosaic-off tail
+            (`hyperparameters={"mosaic": 0.0, "close_mosaic": 0, "warmup_epochs": 0.0}`)
+            off an already-converged checkpoint, which `resume=True` cannot express.
         copy_paste_bank: Curated donor bank directory. When given, training samples get
             synthetic instances pasted in on the fly (`segmentation.copy_paste_training`)
             — the Phase 3 Stage B treatment. `None` trains on real data only, byte-for-byte
@@ -170,7 +199,15 @@ def train(
         model = YOLO(str(Path(resume_from).resolve()))
         results = model.train(resume=True)
     else:
-        train_kwargs: dict[str, Any] = {} if workers is None else {"workers": workers}
+        train_kwargs: dict[str, Any] = {
+            "optimizer": DEFAULT_OPTIMIZER,
+            "lr0": DEFAULT_LR0,
+            "momentum": DEFAULT_MOMENTUM,
+            "warmup_bias_lr": DEFAULT_WARMUP_BIAS_LR,
+            **(hyperparameters or {}),
+        }
+        if workers is not None:
+            train_kwargs["workers"] = workers
         if copy_paste_bank is not None:
             # Custom trainer, not a model.train() kwarg: the bank settings can't be cfg
             # overrides (get_cfg rejects unknown keys) -- see copy_paste_training.py.
@@ -181,7 +218,9 @@ def train(
             train_kwargs["trainer"] = make_donor_bank_trainer(
                 Path(copy_paste_bank).resolve(), p=copy_paste_p, max_donors=copy_paste_max_donors
             )
-        model = YOLO(f"{model_name}.pt")
+        model = YOLO(
+            str(Path(weights_path).resolve()) if weights_path is not None else f"{model_name}.pt"
+        )
         results = model.train(
             data=str(Path(data_yaml).resolve()),
             epochs=epochs,
@@ -306,6 +345,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--workers", type=int, default=None)
     train_parser.add_argument(
         "--resume-from", type=Path, default=None, help="Resume an interrupted weights/last.pt."
+    )
+    train_parser.add_argument(
+        "--initial-weights",
+        type=Path,
+        default=None,
+        help="Start from this checkpoint as a FRESH run (new dir, new MLflow run) rather "
+        "than a stock yolo26*-seg.pt -- unlike --resume-from, this call's own args apply, "
+        "so it can continue a converged run with e.g. mosaic off.",
+    )
+    train_parser.add_argument(
+        "--hyperparameters-json",
+        type=str,
+        default="{}",
+        help="JSON dict of extra model.train() kwargs, merged over the pinned optimizer "
+        'defaults -- e.g. \'{"mosaic": 0.0, "close_mosaic": 0, "lr0": 0.0007}\'.',
+    )
+    train_parser.add_argument(
+        "--hyperparameters-file",
+        type=Path,
+        default=None,
+        help="JSON file with the same shape as --hyperparameters-json. Wins over it if both.",
     )
     train_parser.add_argument(
         "--freeze",
@@ -451,7 +511,9 @@ def main() -> None:
         workers=args.workers,
         freeze=args.freeze,
         data_source=args.data_source,
+        hyperparameters=_load_json_arg(args.hyperparameters_json, args.hyperparameters_file),
         resume_from=args.resume_from,
+        weights_path=args.initial_weights,
         copy_paste_bank=args.copy_paste_bank,
         copy_paste_p=args.copy_paste_p,
         copy_paste_max_donors=args.copy_paste_max_donors,
