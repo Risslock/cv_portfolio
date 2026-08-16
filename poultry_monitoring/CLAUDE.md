@@ -59,7 +59,8 @@ src/poultry_monitoring/
     preprocessing_eval.py  # test-time-only preprocessing comparison harness (ttp CLI) — see docs/adr/0004
     detr.py              # DETR detection train/predict wrappers (secondary/practice track)
   segmentation/
-    yolo.py              # YOLO26-seg wrappers
+    yolo.py              # YOLO26-seg wrappers; owns the seg CLI (train/val/predict/ttp)
+    evaluation.py         # held-out + density-stratified scoring (val CLI) — see docs/adr/0010
     copy_paste_training.py  # on-the-fly copy-paste: Ultralytics transform/dataset/trainer (ADR 0017)
     synthetic_data.py       # offline synthetic-split materializer — documented fallback, not the default
     detr.py              # DETR (panoptic head) or Mask2Former wrappers; SAM stretch goal (see plan.md Future Work)
@@ -122,6 +123,9 @@ uv run python -m poultry_monitoring.detection.yolo predict --weights <pt> --sour
 # synthetic copy-paste (Phase 3 Stage B) — build the donor bank once, then train with it
 uv run python -m poultry_monitoring.augmentation.segmentation build-bank --annotations <json> --img-dir <dir> --bank-dir <dir>
 uv run python -m poultry_monitoring.segmentation.yolo train --data-dir <dir> --copy-paste-bank <dir>  # on-the-fly, per sample
+
+# held-out evaluation — --split Test is deliberately opt-in; --by-density reproduces the README's density figure
+uv run python -m poultry_monitoring.segmentation.yolo val --data-dir <dir> --weights <pt> --split Test --by-density
 
 # augmentation/visualize.py CLI — pure Albumentations/numpy, no torch import, safe to
 # run alongside a live GPU training job (unlike anything above, which all touch torch)
