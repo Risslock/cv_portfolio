@@ -8,6 +8,7 @@ Related tools: `segmentation/preprocessing_eval.py` for test-time preprocessing,
 """
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -414,6 +415,40 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "box+label+mask overlay.",
     )
 
+    val_parser = subparsers.add_parser(
+        "val",
+        help="Score a trained checkpoint on a split (default: the held-out test split), "
+        "optionally stratified into density bins.",
+    )
+    val_parser.add_argument("--data-dir", type=Path, required=True, help="ChickenDet root.")
+    val_parser.add_argument("--weights", type=Path, required=True, help="Trained -seg .pt file.")
+    val_parser.add_argument(
+        "--split",
+        choices=["Validation", "Test"],
+        default="Test",
+        help="Split to evaluate. Test is held out -- keep it that way until tuning and "
+        "model-selection decisions are already final.",
+    )
+    val_parser.add_argument(
+        "--by-density",
+        action="store_true",
+        help="Also score each equal-size density bin separately (images binned by their "
+        "own annotation count), which is how the README's density figure is produced.",
+    )
+    val_parser.add_argument("--bins", type=int, default=3, help="Density bins for --by-density.")
+    val_parser.add_argument("--batch", type=int, default=8)
+    val_parser.add_argument("--imgsz", type=int, default=640)
+    val_parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="DataLoader workers. 0 (default) loads in-process -- repeated val() calls with "
+        "Ultralytics' default of 8 hang on Windows.",
+    )
+    val_parser.add_argument(
+        "--output", type=Path, default=None, help="Write the results dict here as JSON."
+    )
+
     ttp_parser = subparsers.add_parser(
         "ttp",
         help="Compare test-time-only preprocessing (autocontrast/CLAHE/hist-eq/"
@@ -473,6 +508,42 @@ def main() -> None:
         for r in results:
             n_masks = 0 if r.masks is None else len(r.masks)
             print(f"{r.path}: {len(r.boxes)} boxes, {n_masks} masks")
+        return
+
+    if args.command == "val":
+        from poultry_monitoring.segmentation.evaluation import evaluate_by_density, evaluate_split
+
+        data_dir = args.data_dir.resolve()
+        project = data_dir / "YOLO"
+        data_yaml = prepare_data(data_dir, CLASS_NAMES)
+        # Ultralytics keys the split `test`/`val`; --split names the directory, which is
+        # also what instances_<split>.json uses. Map one onto the other here.
+        results = {
+            "overall": evaluate_split(
+                args.weights,
+                data_yaml,
+                project,
+                split="test" if args.split == "Test" else "val",
+                batch=args.batch,
+                imgsz=args.imgsz,
+                workers=args.workers,
+            )
+        }
+        if args.by_density:
+            results["by_density"] = evaluate_by_density(
+                args.weights,
+                data_dir,
+                project,
+                split=args.split,
+                n_bins=args.bins,
+                batch=args.batch,
+                imgsz=args.imgsz,
+                workers=args.workers,
+            )
+        print(json.dumps(results, indent=2))
+        if args.output is not None:
+            args.output.write_text(json.dumps(results, indent=2))
+            print(f"Saved to {args.output}")
         return
 
     if args.command == "ttp":

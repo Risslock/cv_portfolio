@@ -215,6 +215,11 @@ uv run python -m poultry_monitoring.segmentation.yolo train --data-dir data/Chic
     --model-name yolo26n-seg --variant synth_copy_paste --epochs 100 \
     --copy-paste-bank data/ChickenDet/copy_paste_donor_bank --data-source synthetic
 
+# Score a checkpoint on the held-out test split, and per density bin
+# (reproduces both test tables and the density figure above)
+uv run python -m poultry_monitoring.segmentation.yolo val --data-dir data/ChickenDet \
+    --weights <path/to/best.pt> --split Test --by-density --output test_metrics.json
+
 # Inference, masks only
 uv run python -m poultry_monitoring.segmentation.yolo predict --weights <path/to/best.pt> \
     --source path/to/image --masks-only --save-dir predictions/
