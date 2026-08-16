@@ -144,6 +144,21 @@ this level of detail.
   shadows) cost more than added density is worth. A useful reminder that an augmentation
   validated on one model size does not transfer to a larger one for free.
 
+- **The validation split is the easy one, and it flatters every result by ~12 points** — median
+  density is 27 birds/image on Validation vs. **48 on Test**, and Validation's *densest* frame
+  (36) sits below Test's *median*. Test is also a single camera at 1280×720, a resolution
+  Validation never contains. Every segmentation checkpoint loses 11–13 pp of box and mask
+  mAP50-95 crossing over. Not overfitting — a split-construction artifact, and the reason the
+  test figures are the better estimate for a crowded real scene. The copy-paste sign flip
+  reproduces there (box mAP50-95 +1.66 on `n`, −0.90 on `s`), with the `n` gain *larger* on the
+  denser split, and copy-paste narrows the val→test mask gap at both sizes.
+
+- **Repeated `model.val()` in one process hangs on Windows with default workers** — evaluating
+  five checkpoints in a loop stalled indefinitely on the first one (>25 min, no output, no
+  progress on disk). `workers=0` ran all five in under a minute. Same family as
+  [ADR 0007](adr/0007-subprocess-per-optuna-trial.md)'s Windows `spawn` DataLoader trouble;
+  parallel loading buys nothing on a 250-image split anyway.
+
 - **Mask mAP50-95 is too noisy here to read small deltas** — it swings **0.2–0.8 pp between
   adjacent epochs** within a single run (0.95–2.82 pp of spread over the last 20 epochs),
   while box mAP50-95 moves only 0.1–0.5 pp/epoch and climbs near-monotonically. Any mask

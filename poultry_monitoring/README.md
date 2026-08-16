@@ -11,7 +11,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 **Status:** 🟡 In progress.
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
-- ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size: box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`.
+- ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), and the flip reproduces on the held-out test split.
 - 🔲 **Next** — DETR as a secondary track, DALI data loading, ONNX/LiteRT export with latency benchmarks.
 
 ## Table of Contents
@@ -40,7 +40,7 @@ Released under **CC BY-NC-SA 4.0** and used here strictly for non-commercial, ed
 
 ## Results
 
-All numbers are validation-split metrics from an explicit `model.val()` pass after training. **The test split is never used for tuning or comparison decisions**, to avoid implicitly fitting it.
+Unless a table says otherwise, numbers are validation-split metrics from an explicit `model.val()` pass after training. **The test split was never used for tuning or comparison decisions** — it was evaluated exactly once, after every decision below was already fixed. See [Held-Out Test Split](#held-out-test-split).
 
 ### Detection
 
@@ -78,6 +78,31 @@ With every arm on a pinned optimizer ([ADR 0018](docs/adr/0018-pin-segmentation-
 So copy-paste helps the nano model and hurts the small one. The plausible reading is capacity: `yolo26n-seg` is capacity-limited on this data and extra instances buy it something, while `yolo26s-seg` already fits the real distribution well enough that the composites' artifacts — clean cutout edges, no contact shadows — cost more than the added density is worth. The stopping behaviour points the same way: on `n`, copy-paste trained roughly twice as long before plateauing (75 epochs vs. 38); on `s` it stopped *earlier* (41 vs. 65).
 
 Two caveats: single seed per arm, and the `n` and `s` ablations ran at different batch sizes (16 vs. 8 — `s` plus the donor-bank trainer OOMs an 8GB card), though gradient accumulation holds the effective batch at 64 in both cases.
+
+### Held-Out Test Split
+
+Everything above is validation. The test split stayed untouched until the ablation was finished, then all four segmentation checkpoints were evaluated on it once.
+
+| Model | Box mAP50-95 | Mask mAP50-95 |
+|---|---|---|
+| `yolo26n-seg` (Stage A, real data) | 0.754 | 0.702 |
+| `yolo26n-seg` (Stage B, + copy-paste) | 0.771 | 0.710 |
+| `yolo26s-seg` (Stage A, real data) | **0.805** | 0.724 |
+| `yolo26s-seg` (Stage B, + copy-paste) | 0.796 | **0.727** |
+
+Every model drops 11–13 points against its own validation score. That gap is a property of how the splits were built, not evidence of overfitting:
+
+| Split | Images | Distinct resolutions | Median birds/img | Max |
+|---|---|---|---|---|
+| Train | 5,222 | 9 | 20 | 106 |
+| Validation | 1,067 | 2 | 27 | 36 |
+| Test | 250 | 1 (1280×720, absent from Validation) | 48 | 89 |
+
+Validation's *densest* frame holds 36 birds — below the test split's *median* of 48. Density and occlusion are the whole difficulty of this dataset, so a validation split sitting at the sparse end reads optimistically, and the test figures are the better estimate of a crowded real scene.
+
+The copy-paste result reproduces on this unseen data: box mAP50-95 **+1.66** on `yolo26n-seg` and **−0.90** on `yolo26s-seg`, the same directions found on validation. The gain on `n` is *larger* here than on validation, which is what an augmentation built to manufacture density should do when the evaluation gets denser. Copy-paste also narrows the validation→test mask gap at both sizes (−12.50 vs. −13.33 on `n`; −10.82 vs. −11.66 on `s`) — it buys robustness to the density shift even where it doesn't raise the validation score.
+
+Scope caveat: the test split is 250 frames from a single camera at one resolution. It is a good density-shift probe and a poor multi-site generalization test — the cross-facility question in [Applications & Deployment Realities](#applications--deployment-realities) is still open.
 
 ### Sample Predictions
 

@@ -338,6 +338,7 @@ class TestBuildDataYaml:
             "path": str(data_dir),
             "train": "images/Train",
             "val": "images/Validation",
+            "test": "images/Test",
             "names": {0: "Chicken"},
         }
 

@@ -370,6 +370,7 @@ def build_data_yaml(
         "path": str(data_dir),
         "train": train,
         "val": "images/Validation",
+        "test": "images/Test",
         "names": class_names,
     }
     with yaml_path.open("w") as f:
