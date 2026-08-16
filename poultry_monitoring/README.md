@@ -249,7 +249,7 @@ Per-bird detection and segmentation is the primitive that precision livestock fa
 
 ### Why a model trained on five facilities doesn't simply transfer
 
-Each of these breaks the i.i.d. assumption in a different way, and all of them are guaranteed to differ at a new site:
+Each of these breaks the independent and identically distributed assumption in a different way, and all of them are guaranteed to differ at a new site:
 
 - **Camera geometry** — mounting height, angle and lens differ per installation, so apparent bird size and the degree of overhead foreshortening change.
 - **Lighting** — facilities run different light programmes and intensities, and lighting shifts across the day. ChickenVerse's own five facilities already differ enough that a bird cut from one looks visibly wrong pasted into another.
