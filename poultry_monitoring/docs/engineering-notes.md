@@ -135,14 +135,85 @@ this level of detail.
   neither run's `args.yaml` described what actually trained; the optimizer had to be recovered
   from the logged per-group LR traces (8 groups = MuSGD, 3 = AdamW).
 
+- **Screening every delta against a noise floor removes most of the apparent
+  scenario-dependence.** The ablation superficially looks like "copy-paste helps in some
+  situations and hurts in others" — it improves some metrics on validation and different
+  ones on test. Screening all 18 size × metric × split combinations against the measured
+  per-epoch noise (worst swing over the last 20 epochs: **0.54 pp box, 0.81 pp mask**)
+  leaves only three that are both consistent in sign across splits *and* above that floor:
+
+  | | validation | test | |
+  |---|---|---|---|
+  | `yolo26n-seg` box mAP50-95 | +1.19 | +1.67 | stable **+** |
+  | `yolo26n-seg` box precision | +0.87 | +1.31 | stable **+** |
+  | `yolo26s-seg` box mAP50-95 | −0.72 | −0.90 | stable **−** |
+
+  Everything else flips sign between splits or sits under the floor — recall flips at both
+  sizes, mask mAP50-95 flips at both sizes, mask mAP75 flips at both. Those are precisely
+  the metrics that created the "mixed results" impression. The real finding is narrower and
+  firmer: **copy-paste has one measurable effect, box localization, positive on `n` and
+  negative on `s`, holding across two splits whose densities differ by 1.8×.**
+
+- **The effect scales with scene density — and a difference-of-differences got its sign
+  wrong.** Splitting the test split into equal-size terciles by each image's own bird count
+  (~83 images per bin) and re-scoring every checkpoint gives two clean monotonic trends in
+  box mAP50-95, in opposite directions:
+
+  | copy-paste minus baseline | sparse (~36 birds) | medium (~48) | dense (~68) |
+  |---|---|---|---|
+  | `yolo26n-seg` | +1.21 | +1.88 | **+2.01** |
+  | `yolo26s-seg` | +0.22 | −0.23 | **−2.30** |
+
+  A monotonic trend across three independent bins is far better evidence than any single
+  delta, and it tests the mechanism's actual prediction rather than a proxy. It also
+  **retracts** an earlier claim in this file: the validation→test gap in mask mAP50-95 shrank
+  by +0.82 pp on `n` and +0.83 pp on `s`, which was written up as "copy-paste buys density
+  robustness at both sizes." Measured directly, `s` degrades *more* in dense scenes, not
+  less — the composite gave the opposite sign to the truth. Why: the gap is
+  `test_delta − val_delta`, a rearrangement of two numbers already reported that adds no
+  information while adding variance, and both mask deltas were inside the noise floor and
+  happened to straddle zero the same way at both sizes, manufacturing an apparent +0.8 pp
+  effect with matching magnitudes. It is an *interaction* term, which needs more samples than
+  a main effect, not fewer. **Lesson: when a headline number is a difference of noisy
+  differences, stratify and measure the thing directly instead.**
+
+- **What the augmentation can and cannot teach, given where donors come from** — the bank is
+  built from the whole Train split, which spans several facilities and 9 resolutions, so a
+  paste really can drop a bird from one facility into another's scene. But every donor is
+  still *inside* the training distribution — nothing genuinely unseen enters — and
+  [ADR 0015](adr/0015-color-aware-donor-compositing.md)'s LAB matching deliberately damps the
+  cross-facility appearance difference by matching each donor to the target scene's own
+  birds. The pipeline therefore suppresses most of the appearance diversity it could have
+  contributed, in exchange for not looking wrong. What is left is density and occlusion,
+  which is exactly the shape of the results: box localization moves (it teaches *where birds
+  are*, and the `n` gain grows with evaluation density, +1.19 at median 27 birds/img →
+  +1.67 at median 48), while mask quality does not (a pasted donor is a clean cutout with no
+  contact shadow, so there is no boundary signal to learn). Raising mask mAP is a
+  compositing-realism problem; raising box mAP in crowded scenes is what this pipeline does.
+
+- **The ablation asked the least favourable question of it** — "does synthetic data help when
+  5,219 fully-labeled real images already exist?" is the case where it has least to add. The
+  pipeline's stated purpose is cold-start at a new site with unlabeled frames and no masks,
+  where it is not competing with real data but *is* the data; nothing here measures that.
+  Two further biases point the same way: the validation split used for every decision has
+  median density 27 (max 36) and so barely contains the regime the augmentation targets, and
+  the `s` arms ran at one paste strength (`p=0.5`, up to 10 donors) that was never
+  dose-swept. Read the modest numbers as a floor, not a verdict.
+
 - **Copy-paste's effect flips sign with model size** — on matched optimizers, box mAP50-95
-  goes **+1.19 pp on `yolo26n-seg` but −0.72 pp on `yolo26s-seg`** (box recall +0.84 vs.
-  −1.20). Stopping behaviour agrees: on `n` copy-paste trained ~2× longer before plateauing
-  (75 epochs vs. 38), on `s` it stopped *earlier* (41 vs. 65). Plausible reading is capacity —
-  `n` is capacity-limited on this data and extra instances help, while `s` already fits the
-  real distribution well enough that compositing artifacts (clean cutout edges, no contact
-  shadows) cost more than added density is worth. A useful reminder that an augmentation
-  validated on one model size does not transfer to a larger one for free.
+  goes **+1.19 pp on `yolo26n-seg` but −0.72 pp on `yolo26s-seg`**, and both directions
+  reproduce on the held-out test split (+1.67 / −0.90). Stopping behaviour agrees: on `n`
+  copy-paste trained ~2× longer before plateauing (75 epochs vs. 38), on `s` it stopped
+  *earlier* (41 vs. 65), i.e. the extra data stopped yielding signal sooner. (An earlier
+  version of this note cited box recall as corroboration — don't; recall flips sign between
+  validation and test at both sizes and is inside the noise floor.) Capacity is the plausible
+  reading — `n` is capacity-limited here and extra instances help, while `s` fits the real
+  distribution well enough that compositing artifacts cost more than added density is worth —
+  but it is **not demonstrated**: `n` ran at batch 16 and `s` at batch 8 (the `s` model plus
+  the donor-bank trainer OOMs an 8 GB card), so model size co-varies with batch size across
+  the two ablations. Re-running `n` at batch 8 would separate them. Either way it stands as a
+  reminder that an augmentation validated on one model size does not transfer to a larger one
+  for free.
 
 - **The validation split is the easy one, and it flatters every result by ~12 points** — median
   density is 27 birds/image on Validation vs. **48 on Test**, and Validation's *densest* frame

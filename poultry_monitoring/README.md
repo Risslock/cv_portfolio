@@ -11,7 +11,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 **Status:** 🟡 In progress.
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
-- ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), and the flip reproduces on the held-out test split.
+- ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), reproduces on the held-out test split, and scales with scene density — up to **+2.01** on `yolo26n-seg` in the most crowded frames, **−2.30** on `yolo26s-seg`.
 - 🔲 **Next** — DETR as a secondary track, DALI data loading, ONNX/LiteRT export with latency benchmarks.
 
 ## Table of Contents
@@ -73,11 +73,13 @@ With every arm on a pinned optimizer ([ADR 0018](docs/adr/0018-pin-segmentation-
 | `yolo26n-seg` | **+1.19** | +0.84 | −0.02 | +0.59 |
 | `yolo26s-seg` | **−0.72** | −1.20 | −0.54 | −1.37 |
 
-**Read the box column, not the mask column.** Mask mAP50-95 swings 0.2–0.8 points *between adjacent epochs* within a single run (0.95–2.82 points of spread across the last 20), so no mask delta here clears its own run's noise. Box mAP50-95 is much steadier at 0.1–0.5 points per epoch, which makes both box numbers readable — if only by a factor of a few.
+**Read the box mAP50-95 column; treat the rest as noise.** Mask mAP50-95 swings 0.2–0.8 points *between adjacent epochs* within a single run (0.95–2.82 points of spread across the last 20), so no mask delta here clears its own run's noise. Box mAP50-95 is much steadier at 0.1–0.5 points per epoch, which makes those two numbers readable. The recall columns are shown for completeness but shouldn't be leaned on either — they flip sign between validation and test at both model sizes. Screening every metric against that noise floor is what separates the real result from the apparent one; see [engineering notes](docs/engineering-notes.md).
 
 So copy-paste helps the nano model and hurts the small one. The plausible reading is capacity: `yolo26n-seg` is capacity-limited on this data and extra instances buy it something, while `yolo26s-seg` already fits the real distribution well enough that the composites' artifacts — clean cutout edges, no contact shadows — cost more than the added density is worth. The stopping behaviour points the same way: on `n`, copy-paste trained roughly twice as long before plateauing (75 epochs vs. 38); on `s` it stopped *earlier* (41 vs. 65).
 
-Two caveats: single seed per arm, and the `n` and `s` ablations ran at different batch sizes (16 vs. 8 — `s` plus the donor-bank trainer OOMs an 8GB card), though gradient accumulation holds the effective batch at 64 in both cases.
+Two caveats: single seed per arm, and the `n` and `s` ablations ran at different batch sizes (16 vs. 8 — `s` plus the donor-bank trainer OOMs an 8GB card), though gradient accumulation holds the effective batch at 64 in both cases. The second one means model size co-varies with batch size across the two ablations, so "capacity" is a hypothesis rather than a demonstrated mechanism; re-running `n` at batch 8 would separate them.
+
+A single number per model also averages away the clearest pattern in the data: both effects **scale with how crowded the scene is**, which only appears once the evaluation is split by density — see [The effect scales with scene density](#the-effect-scales-with-scene-density) below.
 
 ### Held-Out Test Split
 
@@ -100,7 +102,24 @@ Every model drops 11–13 points against its own validation score. That gap is a
 
 Validation's *densest* frame holds 36 birds — below the test split's *median* of 48. Density and occlusion are the whole difficulty of this dataset, so a validation split sitting at the sparse end reads optimistically, and the test figures are the better estimate of a crowded real scene.
 
-The copy-paste result reproduces on this unseen data: box mAP50-95 **+1.66** on `yolo26n-seg` and **−0.90** on `yolo26s-seg`, the same directions found on validation. The gain on `n` is *larger* here than on validation, which is what an augmentation built to manufacture density should do when the evaluation gets denser. Copy-paste also narrows the validation→test mask gap at both sizes (−12.50 vs. −13.33 on `n`; −10.82 vs. −11.66 on `s`) — it buys robustness to the density shift even where it doesn't raise the validation score.
+The copy-paste result reproduces on this unseen data: box mAP50-95 **+1.66** on `yolo26n-seg` and **−0.90** on `yolo26s-seg`, the same directions found on validation. The gain on `n` is *larger* here than on validation, which is what an augmentation built to manufacture density should do when the evaluation gets denser.
+
+#### The effect scales with scene density
+
+The single aggregate number per model hides the most useful pattern. Splitting the test split into equal-size thirds by each image's own bird count, and re-scoring every checkpoint per bin:
+
+<p align="center">
+  <img src="docs/images/copy_paste_density_effect.png" width="820" alt="Line chart: copy-paste's change in box mAP50-95 across sparse, medium and dense test images. yolo26n-seg rises from +1.21 to +2.01; yolo26s-seg falls from +0.22 to −2.30.">
+</p>
+
+| Box mAP50-95 change | Sparse (~36 birds) | Medium (~48) | Dense (~68) |
+|---|---|---|---|
+| `yolo26n-seg` | +1.21 | +1.88 | **+2.01** |
+| `yolo26s-seg` | +0.22 | −0.23 | **−2.30** |
+
+Both trends are monotonic in density, in opposite directions. On `yolo26n-seg` synthetic data helps, and **helps more the more crowded the scene** — which is the behaviour you would want from an augmentation whose purpose is manufacturing density. On `yolo26s-seg` it hurts, and the damage is almost entirely in the dense third; in sparse frames it is harmless.
+
+Why the larger model responds the opposite way is not something this project chased down — it is stated as observed, not explained.
 
 Precision and recall move in mirror image, which the mAP columns hide — percentage points, real → real + synthetic:
 
