@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this directory.
 
 ## Project Intent
 
-A portfolio piece whose primary goal is a genuinely good object detection + instance segmentation model for poultry monitoring on ChickenVerse/ChickenDet (dense, high-occlusion overhead imagery) — **not a comparison exercise for its own sake**. Ultralytics **YOLO26** (CNN, anchor-free/NMS-free) is the model actually getting productionized: real fine-tuning, hyperparameter tuning, a size sweep, MLflow-tracked runs. **DETR** (transformer, set-prediction) is a secondary track — the user's own hands-on practice with transformer architectures, trained and evaluated the same way when there's time for it, but it does not gate or dilute focus from getting YOLO26 right. If/when both are far enough along to compare, do so fairly (constitution Principle IV), but don't default to "need both before productionizing" reasoning. Beyond model accuracy, the project also covers domain-specific augmentation, a GPU-accelerated data loading pipeline (NVIDIA DALI vs. standard `DataLoader`), and export/optimization (ONNX Runtime, TFLite/LiteRT) with latency/throughput benchmarking. See the [README](README.md) for the full problem statement and dataset details.
+A portfolio piece whose primary goal is a genuinely good object detection + instance segmentation model for poultry monitoring on ChickenVerse/ChickenDet (dense, high-occlusion overhead imagery) — **not a comparison exercise for its own sake**. Ultralytics **YOLO26** (CNN, anchor-free/NMS-free) is the model actually getting productionized: real fine-tuning, hyperparameter tuning, a size sweep, MLflow-tracked runs. **DETR** (transformer, set-prediction) is a secondary track — the user's own hands-on practice with transformer architectures, trained and evaluated the same way when there's time for it, but it does not gate or dilute focus from getting YOLO26 right. If/when both are far enough along to compare, do so fairly (constitution Principle IV), but don't default to "need both before productionizing" reasoning. Beyond model accuracy, the project also covers domain-specific augmentation and export/optimization (ONNX Runtime, OpenVINO, TensorRT) with quantization, accuracy-degradation measurement, and latency/throughput benchmarking. A DALI-vs-`DataLoader` track was scoped and then closed on measured grounds — the training loop is GPU-bound ([ADR 0019](docs/adr/0019-discard-dali.md)). See the [README](README.md) for the full problem statement and dataset details.
 
 ## Workflow: Why This Project Uses Hybrid (constitution.md + plan.md + CLAUDE.md)
 
@@ -47,7 +47,6 @@ Per constitution Principle II, exploratory notebooks (`notebooks/`, run on Colab
 src/poultry_monitoring/
   data/
     coco.py            # ChickenDet COCO parsing + prepare_data (shared: boxes + masks in one annotation file)
-    dali_pipeline.py   # GPU-accelerated DALI loader (Phase 5)
   augmentation/
     shared.py           # task-agnostic: lighting/color jitter (build_domain_transforms)
     visualize.py         # before/after grids for shared.py's transforms — no torch import
@@ -64,10 +63,10 @@ src/poultry_monitoring/
     copy_paste_training.py  # on-the-fly copy-paste: Ultralytics transform/dataset/trainer (ADR 0017)
     synthetic_data.py       # offline synthetic-split materializer — documented fallback, not the default
     detr.py              # DETR (panoptic head) or Mask2Former wrappers; SAM stretch goal (see plan.md Future Work)
-  export.py               # ONNX/LiteRT export, shared across task + model
-  benchmark.py             # latency/throughput harness, shared
-  metrics.py               # box/mask mAP computation, shared
-  mlflow_utils.py          # MLflow config/logging helpers, shared
+  export.py               # ONNX/OpenVINO/TensorRT export + quantization + the artifact manifest, shared
+  inference.py             # THE single model-load path (owns task=, device, thread pinning, warmup) + runner CLI
+  benchmark.py              # latency/throughput harness, shared
+  mlflow_utils.py            # MLflow config/logging helpers, shared
 
 tests/                # pytest smoke tests, mirrors package structure
 notebooks/            # Colab exploration notebooks (Phase 1 onward)
@@ -77,13 +76,17 @@ results/              # gitignored: per-run artifacts, one dir per MLflow run
 
 Rule of thumb for "does this go in a task dir or a shared module": if segmentation and detection would do the *exact same thing* here, it's shared; if the task changes the logic (not just the input), it belongs in `detection/` or `segmentation/`.
 
+**There is deliberately no `metrics.py`.** An earlier version of this layout reserved one for "box/mask mAP computation, shared", but `segmentation/yolo.py`'s `extract_metrics` already *is* that single source of truth — it owns the Ultralytics-result-to-metric-name mapping and is imported by `segmentation/evaluation.py`, `segmentation/preprocessing_eval.py` and the benchmark harness. Adding `metrics.py` would duplicate it, not share it. Don't re-create it; extend `extract_metrics` instead.
+
+**Loading a model is `inference.load_model`'s job, everywhere.** Export, accuracy scoring, benchmarking and prediction all open artifacts through that one function, so *what you benchmark is what you serve* holds structurally. It also concentrates the non-obvious bits in one place — chiefly the mandatory `task="segment"`, since Ultralytics' `guess_model_task` matches only `"-seg" in path.stem` and an exported `…/weights/best.onnx` silently resolves to `"detect"` (see `docs/adr/0020`). Don't call `YOLO(...)` directly in new code.
+
 ## MLflow Conventions
 
 - **Experiments — one per task, not one unified experiment**: `poultry_detection` and `poultry_segmentation`. Model family (`yolo26`/`detr`/future `sam`) is a run tag/param within each, not a separate experiment — this keeps mAP/mask-mAP metric columns directly comparable within an experiment's runs table, since detection and segmentation don't share the same metrics anyway.
 - **Tracking URI**: `sqlite:///mlflow.db` (native Windows env only — no cross-environment split needed here, unlike `../fashion_MNIST/`, since this project doesn't use a container).
 - **Run naming — hint at the model, `run_id` suffix for uniqueness**: `mlflow_utils.make_run_name(model_family, variant)` renames the active run to `f"{model_family}-{variant}-{run_id[:8]}"` — e.g. `yolo26-n-tuned-7e954a89`. Not MLflow's own auto-generated adjective-animal name (that was the original plan; not reliably reachable through `model.train()`'s public kwargs — see `docs/adr/0003-native-mlflow-integration.md`).
 - **Params to log**: `model_family` (`yolo26`/`detr`/`sam`), `variant` (scale/backbone) — plus everything Ultralytics' native MLflow integration already auto-logs from `trainer.args` (`lr0`, `batch`, `epochs`, `imgsz`, `seed`, ...), so don't re-log those by hand.
-- **Metrics**: `box_map50`, `box_map50_95`, `box_precision`, `box_recall` (in `poultry_detection`, via `mlflow_utils.finish_run`'s `extra_metrics` — Ultralytics' own auto-logged per-epoch metrics use different key names, e.g. `metrics/mAP50(B)`); `mask_map50`, `mask_map50_95` (in `poultry_segmentation`, not yet implemented); `throughput_img_per_sec` (DALI benchmark runs); `latency_ms` (export benchmark runs, tag with `precision` and `export_target`).
+- **Metrics**: `box_map50`, `box_map50_95`, `box_precision`, `box_recall` (in `poultry_detection`, via `mlflow_utils.finish_run`'s `extra_metrics` — Ultralytics' own auto-logged per-epoch metrics use different key names, e.g. `metrics/mAP50(B)`); the nine box+mask keys from `segmentation/yolo.py`'s `extract_metrics` (in `poultry_segmentation`); `latency_ms_mean`/`latency_ms_median`/`latency_ms_p95` and `throughput_img_per_sec` (export benchmark runs — tag with `export_target`, `precision`, `device` and `batch`, per constitution Principle V).
 - **Artifacts**: best model weights, sample predictions (boxes/masks overlaid), PR curves, and — for benchmark runs — the hardware/batch-size/precision table required by constitution Principle V.
 - Use snake_case for all logged param/metric names, matching repo-wide convention (`../fashion_MNIST/CLAUDE.md`, `../MNIST/`).
 

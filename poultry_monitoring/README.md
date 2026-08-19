@@ -12,7 +12,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
 - ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), reproduces on the held-out test split, and scales with scene density — up to **+2.01** on `yolo26n-seg` in the most crowded frames, **−2.30** on `yolo26s-seg`.
-- 🔲 **Next** — DETR as a secondary track, DALI data loading, ONNX/LiteRT export with latency benchmarks.
+- 🔲 **Next** — ONNX Runtime / OpenVINO / TensorRT export with INT8 quantization, measured accuracy degradation, and CPU-vs-GPU latency benchmarks. DETR remains a secondary track. A DALI data-loading track was scoped and closed after measurement showed the training loop is GPU-bound, not input-bound ([ADR 0019](docs/adr/0019-discard-dali.md)).
 
 ## Table of Contents
 
@@ -254,7 +254,7 @@ Export/benchmark entry points don't exist yet — see [`plan.md`](plan.md).
 - **[MLflow](https://mlflow.org/)** — experiment tracking, local SQLite store
 - **PyTorch** — underlying training framework
 - **[DETR](https://huggingface.co/docs/transformers/model_doc/detr)** — transformer-based detector; a secondary practice track
-- **[NVIDIA DALI](https://developer.nvidia.com/dali)**, **[ONNX Runtime](https://onnxruntime.ai/)**, **[LiteRT](https://ai.google.dev/edge/litert)** — planned, for GPU data loading and export/optimization
+- **[ONNX Runtime](https://onnxruntime.ai/)**, **[OpenVINO](https://docs.openvino.ai/)**, **[TensorRT](https://developer.nvidia.com/tensorrt)** — planned, for export/quantization and latency benchmarking
 
 ## Architecture
 
