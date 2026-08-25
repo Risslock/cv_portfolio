@@ -13,10 +13,10 @@ in opposite directions for `yolo26n-seg` and `yolo26s-seg`. See the README's
 import json
 from pathlib import Path
 
-from ultralytics import YOLO
 from ultralytics.utils import YAML
 
 from poultry_monitoring.data.coco import CLASS_NAMES
+from poultry_monitoring.inference import load_model
 from poultry_monitoring.segmentation.yolo import extract_metrics
 
 # Ultralytics' default (8) spawns DataLoader workers per `val()` call. Evaluating several
@@ -87,11 +87,14 @@ def evaluate_split(
     batch: int = DEFAULT_BATCH,
     imgsz: int = 640,
     workers: int = DEFAULT_WORKERS,
+    task: str = "segment",
+    rect: bool | None = None,
 ) -> dict[str, float]:
-    """Score one checkpoint on one split, returning this project's box+mask metric names.
+    """Score one checkpoint or exported artifact on one split, in this project's metric names.
 
     Args:
-        weights_path: Trained `-seg` checkpoint.
+        weights_path: Trained `-seg` checkpoint, or any exported artifact
+            (`.onnx`/`.engine`/`*_openvino_model/`).
         data_yaml: Dataset YAML declaring the split being asked for.
         project: Local save dir for `model.val()` artifacts.
         split: Which split key in `data_yaml` to evaluate — `"val"` or `"test"`.
@@ -99,6 +102,14 @@ def evaluate_split(
         batch: Evaluation batch size.
         imgsz: Evaluation image size — must match training to be comparable.
         workers: `DataLoader` workers; see `DEFAULT_WORKERS` for why this is 0.
+        task: Ultralytics task. Must stay `"segment"` for exported artifacts: Ultralytics
+            infers task from the *filename*, and an exported `.../weights/best.onnx` matches
+            no `-seg` pattern, so it silently scores as `detect` and returns no mask metrics
+            at all. See docs/adr/0020.
+        rect: Letterbox mode. `None` uses Ultralytics' default (`True`, aspect-ratio
+            padding). Pass `False` to force square padding, which is what a graph frozen at
+            `imgsz x imgsz` is restricted to — a PyTorch baseline must match the artifact's
+            mode or a ~0.7 mask-mAP50 padding difference is misread as quantization loss.
 
     Returns:
         Flat metrics dict, same shape as `segmentation.yolo.extract_metrics`.
@@ -106,7 +117,8 @@ def evaluate_split(
     weights_path = Path(weights_path).resolve()
     if name is None:
         name = f"{weights_path.parent.parent.name}-{split}eval"
-    metrics = YOLO(str(weights_path)).val(
+    optional = {} if rect is None else {"rect": rect}
+    metrics = load_model(weights_path, task=task).val(
         data=str(Path(data_yaml).resolve()),
         split=split,
         project=str(Path(project).resolve()),
@@ -117,6 +129,7 @@ def evaluate_split(
         batch=batch,
         imgsz=imgsz,
         workers=workers,
+        **optional,
     )
     return extract_metrics(metrics)
 
@@ -131,6 +144,8 @@ def evaluate_by_density(
     batch: int = DEFAULT_BATCH,
     imgsz: int = 640,
     workers: int = DEFAULT_WORKERS,
+    task: str = "segment",
+    rect: bool | None = None,
 ) -> dict[str, dict]:
     """Score one checkpoint separately on each density bin of a split.
 
@@ -150,6 +165,8 @@ def evaluate_by_density(
         batch: Evaluation batch size.
         imgsz: Evaluation image size.
         workers: `DataLoader` workers; see `DEFAULT_WORKERS`.
+        task: Ultralytics task; see `evaluate_split`.
+        rect: Letterbox mode; see `evaluate_split`.
 
     Returns:
         `{"bins": {label: {images, instances, min, median, max}}, "metrics":
@@ -188,6 +205,8 @@ def evaluate_by_density(
             batch=batch,
             imgsz=imgsz,
             workers=workers,
+            task=task,
+            rect=rect,
         )
 
     results = {
@@ -200,3 +219,111 @@ def evaluate_by_density(
     if output_path is not None:
         Path(output_path).write_text(json.dumps(results, indent=2))
     return results
+
+
+def score_manifest(
+    manifest_path: Path,
+    data_yaml: Path,
+    project: Path,
+    splits: tuple[str, ...] = ("Validation", "Test"),
+    variants: list[str] | None = None,
+    batch: int = DEFAULT_BATCH,
+    imgsz: int = 640,
+    workers: int = DEFAULT_WORKERS,
+) -> dict[str, dict]:
+    """Score every exported artifact in the manifest, writing results back into it.
+
+    Exploits the fact that **accuracy is a property of the artifact, not of the device it
+    runs on**: an INT8 graph scores the same wherever it executes, so each artifact is
+    scored once per split while the device/batch sweep is left entirely to the latency
+    harness. That is what keeps this a ~30-cell job rather than a ~90-cell one.
+
+    Each artifact is scored under its own letterbox mode (`rect` follows the entry's
+    `dynamic` flag), so a delta against `export.baseline_for`'s matching baseline reflects
+    quantization alone rather than padding.
+
+    Args:
+        manifest_path: Export manifest to read and enrich.
+        data_yaml: Dataset YAML declaring the splits.
+        project: Local save dir for `model.val()` artifacts.
+        splits: Split directory names — mapped onto Ultralytics' `val`/`test` keys.
+        variants: Manifest keys to score. Defaults to every entry without an `error`.
+        batch: Evaluation batch size.
+        imgsz: Evaluation image size.
+        workers: `DataLoader` workers; see `DEFAULT_WORKERS`.
+
+    Returns:
+        `{manifest_key: {split: <extract_metrics dict>}}` for everything scored.
+    """
+    from poultry_monitoring.export import read_manifest, update_manifest_entry
+
+    entries = read_manifest(manifest_path)
+    keys = variants or sorted(k for k in entries if "error" not in entries[k])
+    scored: dict[str, dict] = {}
+
+    for key in keys:
+        entry = entries[key]
+        artifact = Path(entry["path"])
+        if not artifact.exists():
+            scored[key] = {"error": f"missing artifact: {artifact}"}
+            continue
+        # A frozen graph cannot do rectangular letterboxing; force the same square padding
+        # on the PyTorch baselines so the two are actually comparable (docs/adr/0020).
+        rect = bool(entry.get("dynamic"))
+        per_split: dict[str, dict] = {}
+        for split in splits:
+            try:
+                per_split[split] = evaluate_split(
+                    artifact,
+                    data_yaml,
+                    project,
+                    split="test" if split == "Test" else "val",
+                    name=f"score-{key}-{split}".replace("__", "-"),
+                    batch=batch,
+                    imgsz=imgsz,
+                    workers=workers,
+                    task="segment",
+                    rect=rect,
+                )
+            except Exception as error:  # noqa: BLE001 - one unscoreable artifact must not
+                # abort the sweep; the failure is recorded against that entry instead.
+                per_split[split] = {"error": f"{type(error).__name__}: {error}"}
+        scored[key] = per_split
+        # `accuracy` mirrors the primary split so `summarize_manifest` has one number to
+        # show; `accuracy_by_split` keeps the full picture.
+        primary = per_split.get("Test") or next(iter(per_split.values()))
+        update_manifest_entry(
+            manifest_path,
+            key,
+            {"accuracy": primary, "accuracy_by_split": per_split, "scored_rect": rect},
+        )
+    return scored
+
+
+def accuracy_deltas(manifest_path: Path, split: str = "Test") -> dict[str, dict]:
+    """Compare each variant against its shape-matched PyTorch baseline.
+
+    Args:
+        manifest_path: Manifest already populated by `score_manifest`.
+        split: Which split's numbers to compare.
+
+    Returns:
+        `{manifest_key: {"baseline": key, metric: delta, ...}}`, skipping entries whose
+        baseline wasn't scored.
+    """
+    from poultry_monitoring.export import baseline_for, entry_key, read_manifest
+
+    entries = read_manifest(manifest_path)
+    deltas: dict[str, dict] = {}
+    for key, entry in entries.items():
+        metrics = (entry.get("accuracy_by_split") or {}).get(split)
+        if not metrics or "error" in metrics:
+            continue
+        base_key = entry_key(entry.get("model", ""), baseline_for(entry))
+        base = (entries.get(base_key, {}).get("accuracy_by_split") or {}).get(split)
+        if not base or "error" in base or base_key == key:
+            continue
+        deltas[key] = {"baseline": base_key} | {
+            name: round(value - base[name], 4) for name, value in metrics.items() if name in base
+        }
+    return deltas

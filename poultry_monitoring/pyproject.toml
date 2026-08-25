@@ -1,7 +1,7 @@
 [project]
 name = "poultry-monitoring"
 version = "0.1.0"
-description = "YOLO26 vs. DETR detection & instance segmentation on ChickenVerse, plus DALI loading and ONNX/LiteRT export benchmarking."
+description = "YOLO26 detection & instance segmentation on ChickenVerse, with synthetic copy-paste augmentation and ONNX/OpenVINO/TensorRT export + quantization benchmarking."
 requires-python = ">=3.11"
 dependencies = [
     # Pinned versions TBD at Phase 0 (see plan.md) once training actually starts —
@@ -23,6 +23,30 @@ dev = [
     "jupyter>=1.0",
     "ipykernel>=6.29",
     "torchinfo>=1.8",
+]
+
+# Phase 6 export/quantization backends. Declared here rather than left to Ultralytics'
+# AutoUpdate, which pip-installs missing backends at export time and would put them
+# outside uv.lock (constitution Principle VII).
+#
+# `onnxruntime-gpu` only -- deliberately NOT alongside `onnxruntime`. Both publish the
+# same `onnxruntime` module, so installing both leaves whichever landed last in place;
+# the GPU build ships the CPU execution provider too, so it covers both devices.
+export = [
+    "onnx>=1.22",
+    # Upper-bounded at <1.23 deliberately: 1.23+ links against CUDA 13 (`cublasLt64_13.dll`),
+    # while torch here is cu124. The CUDA-12 builds resolve against the CUDA 12 + cuDNN 9
+    # DLLs torch already ships, so this pin needs no extra multi-GB runtime wheels. Raising
+    # it means either a cu13 torch or installing CUDA 13 runtime libs alongside.
+    "onnxruntime-gpu>=1.22,<1.23",  # CUDA + CPU execution providers, and .quantization
+    "onnxslim>=0.1.96",  # graph simplification; Ultralytics calls it for onnx/INT8 exports
+    "openvino>=2026.3",
+    "nncf>=3.3",  # OpenVINO post-training INT8 quantization
+    # Upper-bounded at <11 deliberately: TensorRT 11 dropped `BuilderFlag.FP16`/`INT8`/
+    # `OBEY_PRECISION_CONSTRAINTS` for strongly-typed networks, and ultralytics 8.4.117's
+    # `utils/export/engine.py` still sets all three -- engine export raises AttributeError
+    # on TRT 11. Revisit when Ultralytics supports the strongly-typed builder API.
+    "tensorrt>=10.7,<11",
 ]
 
 # CUDA wheels on the local native-Windows env (constitution Principle IX). If this is
