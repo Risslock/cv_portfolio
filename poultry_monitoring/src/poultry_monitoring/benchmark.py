@@ -59,6 +59,7 @@ from poultry_monitoring.inference import (  # noqa: E402
 DEFAULT_WARMUP = 10
 DEFAULT_ITERATIONS_GPU = 100
 DEFAULT_ITERATIONS_CPU = 30  # CPU FP32 runs ~250 ms/image; 30 keeps a cell near 10 s
+STAGE_PROBES = 5  # the per-stage split is averaged; one call is too noisy to decompose e2e
 
 
 @dataclass
@@ -218,7 +219,7 @@ def benchmark_variant(
     warmup: int = DEFAULT_WARMUP,
     iterations: int | None = None,
     cpu_threads: int | None = None,
-    entry_is_dynamic: bool = True,
+    letterbox: str = "rect",
 ) -> dict[str, object]:
     """Measure one (artifact x device x batch) cell, both forward and end-to-end.
 
@@ -234,8 +235,11 @@ def benchmark_variant(
         warmup: Warmup iterations, discarded.
         iterations: Timed iterations. Defaults by device, since CPU cells are ~10x slower.
         cpu_threads: Torch thread count to pin, for reproducible CPU numbers.
-        entry_is_dynamic: Whether the artifact has a symbolic input shape. Recorded so the
-            end-to-end column can be read within its shape class rather than across it.
+        letterbox: How `predict()` actually pads this artifact -- `"rect"` (aspect-ratio)
+            or `"square"`. Recorded so the end-to-end column is read within its shape class
+            rather than across it. This is a property of the *runtime*, not of how the
+            artifact was scored: a `.pt` always pads rect regardless of the `dynamic` flag
+            its manifest entry carries for accuracy-baseline purposes.
 
     Returns:
         Dict with `runtime` (observed providers/device), `forward` and `end_to_end` stats,
@@ -295,10 +299,16 @@ def benchmark_variant(
     # end-to-end, so an end-to-end comparison is only fair *within* a shape class -- the
     # same confound that `export.baseline_for` handles on the accuracy side. `forward` is
     # immune, since it pins every backend to the same square tensor.
-    probe = model.predict(batch_images[:1], imgsz=imgsz, device=device, verbose=False)[0]
-    result["stage_ms"] = {k: round(v, 3) for k, v in probe.speed.items()}
+    # Averaged over several probes, not one: a single call is noisy enough to disagree with
+    # the averaged end-to-end figure it is meant to decompose.
+    stages: list[dict] = []
+    for _ in range(STAGE_PROBES):
+        probe = model.predict(batch_images[:1], imgsz=imgsz, device=device, verbose=False)[0]
+        stages.append(dict(probe.speed))
+    result["stage_ms"] = {k: round(statistics.fmean(x[k] for x in stages), 3) for k in stages[0]}
+    result["stage_probes"] = len(stages)
     result["inference_shape"] = list(getattr(probe, "orig_shape", ()) or ())
-    result["letterbox"] = "rect" if entry_is_dynamic else "square"
+    result["letterbox"] = letterbox
     return result
 
 
@@ -469,6 +479,81 @@ def build_summary(manifest_path: Path, results_path: Path, repo_root: Path) -> s
     return "\n".join(out) + "\n"
 
 
+def aggregate_results(paths: list[Path]) -> dict:
+    """Combine repeated sweeps into per-cell medians, with the observed spread recorded.
+
+    A single sweep cannot support a small claim. Backends differ enormously in how stable
+    they are -- ONNX Runtime and PyTorch cells here repeat within 1-4%, while OpenVINO
+    swings up to 26% -- so a 10% difference measured once may be noise on one backend and a
+    real effect on another. Taking the median across runs and publishing `spread_pct`
+    alongside it lets a reader see which is which instead of trusting a lone number.
+
+    Args:
+        paths: Result files from separate sweeps of the same matrix.
+
+    Returns:
+        A results payload of the same shape, whose `forward`/`end_to_end` statistics are
+        per-cell medians, plus `runs` and `spread_pct` (end-to-end peak-to-peak as a
+        percentage of the median) on every cell.
+
+    Raises:
+        ValueError: If no paths are given.
+    """
+    if not paths:
+        raise ValueError("aggregate_results needs at least one results file")
+    payloads = [json.loads(Path(p).read_text()) for p in paths]
+    merged: dict[str, dict] = {}
+    for key in sorted({k for p in payloads for k in p.get("results", {})}):
+        cells = [p["results"][key] for p in payloads if key in p.get("results", {})]
+        usable = [c for c in cells if "error" not in c]
+        if not usable:
+            merged[key] = cells[0]
+            continue
+        out = dict(usable[-1])
+        for block in ("forward", "end_to_end"):
+            present = [c[block] for c in usable if block in c]
+            if not present:
+                continue
+            out[block] = {
+                k: (
+                    round(statistics.median(x[k] for x in present), 3)
+                    if isinstance(present[0][k], (int, float))
+                    else present[0][k]
+                )
+                for k in present[0]
+            }
+        totals = [c["end_to_end"]["mean_ms"] for c in usable if "end_to_end" in c]
+        if len(totals) > 1:
+            median = statistics.median(totals)
+            out["spread_pct"] = round(100 * (max(totals) - min(totals)) / median, 1)
+        out["runs"] = len(usable)
+        merged[key] = out
+    return {"hardware": payloads[-1].get("hardware", {}), "results": merged}
+
+
+def letterbox_for(entry: dict) -> str:
+    """How `predict()` will actually pad this artifact at runtime.
+
+    Deliberately not just `entry["dynamic"]`. That flag serves the *accuracy* comparison --
+    it selects which baseline a variant is scored against -- and the two PyTorch baselines
+    carry `dynamic=False`/`True` to represent one checkpoint scored under `val(rect=False)`
+    and `val(rect=True)`. But `predict()` takes no `rect` argument and a `.pt` has no frozen
+    input shape, so a PyTorch model always pads to the source aspect ratio whichever baseline
+    row it stands in. Labelling it "square" claimed a runtime difference that does not exist,
+    and the measurements said so: the two PyTorch rows' inference stages matched within 1%
+    where a real square/rect split would differ by ~1.7x.
+
+    Args:
+        entry: Manifest entry carrying `backend` and `dynamic`.
+
+    Returns:
+        `"rect"` or `"square"`.
+    """
+    if entry.get("backend") == "pytorch":
+        return "rect"
+    return "rect" if entry.get("dynamic") else "square"
+
+
 def devices_for(entry: dict) -> list[str | int | None]:
     """List the devices an artifact can actually run on.
 
@@ -522,6 +607,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=None, help="Write results JSON here.")
     parser.add_argument("--no-mlflow", action="store_true", help="Skip MLflow logging.")
     parser.add_argument(
+        "--aggregate",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Combine repeated sweep result files into per-cell medians with the observed "
+        "spread, write to --output, then exit. Use for claims smaller than run-to-run noise.",
+    )
+    parser.add_argument(
         "--summary",
         type=Path,
         default=None,
@@ -539,6 +632,19 @@ def main() -> None:
     args = _build_arg_parser().parse_args()
     data_dir = args.data_dir.resolve()
     manifest_path = args.manifest or default_manifest_path(data_dir)
+
+    if args.aggregate is not None:
+        payload = aggregate_results(args.aggregate)
+        out = args.output or data_dir / "YOLO" / "export" / "benchmark_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2))
+        widest = max(
+            ((c.get("spread_pct", 0.0), k) for k, c in payload["results"].items()),
+            default=(0.0, "-"),
+        )
+        print(f"Aggregated {len(args.aggregate)} runs into {out}")
+        print(f"  {len(payload['results'])} cells; widest spread {widest[0]}% ({widest[1]})")
+        return
 
     if args.summary is not None:
         # Repo root: this file is src/poultry_monitoring/benchmark.py.
@@ -577,7 +683,7 @@ def main() -> None:
                         warmup=args.warmup,
                         iterations=args.iterations,
                         cpu_threads=args.cpu_threads,
-                        entry_is_dynamic=bool(entry.get("dynamic")),
+                        letterbox=letterbox_for(entry),
                     )
                 except Exception as error:  # noqa: BLE001 - keep sweeping other cells
                     print(f"FAIL  {label}  {type(error).__name__}: {error}")

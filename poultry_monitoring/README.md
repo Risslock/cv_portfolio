@@ -12,7 +12,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
 - ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), reproduces on the held-out test split, and scales with scene density — up to **+2.01** on `yolo26n-seg` in the most crowded frames, **−2.30** on `yolo26s-seg`.
-- ✅ **Export & optimization** — 14 artifacts across ONNX Runtime / OpenVINO / TensorRT at FP32/FP16/INT8, accuracy measured against letterbox-matched baselines and latency benchmarked on CPU and GPU. TensorRT FP16 runs **1.7× faster end-to-end at identical accuracy**; FP32 export is numerically exact. DETR remains a secondary track. A DALI data-loading track was scoped and closed after measurement showed the training loop is GPU-bound, not input-bound ([ADR 0019](docs/adr/0019-discard-dali.md)).
+- ✅ **Export & optimization** — 16 artifacts across ONNX Runtime / OpenVINO / TensorRT at FP32/FP16/INT8, accuracy measured against letterbox-matched baselines and latency benchmarked on CPU and GPU. TensorRT FP16 runs **1.8× faster end-to-end** (3.9× on the network itself, after which letterboxing and mask assembly dominate); FP32 export is numerically exact. DETR remains a secondary track. A DALI data-loading track was scoped and closed after measurement showed the training loop is GPU-bound, not input-bound ([ADR 0019](docs/adr/0019-discard-dali.md)).
 
 ## Table of Contents
 
@@ -180,54 +180,121 @@ Test-split frames, never used for training or tuning. Boxes only for detection, 
 ### Export & Deployment Cost
 
 `yolo26s-seg` + copy-paste — the pick from the tables above — exported across ONNX Runtime,
-OpenVINO and TensorRT at FP32/FP16/INT8, then scored and timed. Accuracy is Validation
-mAP50-95; `forward` is the network alone at a fixed square input, `end-to-end` adds
-letterboxing and mask assembly. Batch 1, RTX 2060 SUPER / Ryzen 5 3600XT. Sorted by mask
-accuracy.
+OpenVINO and TensorRT at FP32/FP16/INT8, then scored and timed. Batch 1, RTX 2060 SUPER /
+Ryzen 5 3600XT. **Every timing is the median of three full sweeps**, with the run-to-run
+`spread` shown so small differences can be judged against the noise that produced them.
+
+**Δ mask** is measured against the FP32 PyTorch baseline sharing that row's input padding,
+so it isolates what the *precision change* cost. Rows marked † run a frozen square 640×640
+graph; the rest keep the source 16:9 ratio at 640×384, ~1.7× fewer pixels. That inflates the
+end-to-end column for † rows, so compare timings within a padding class — or use the
+equal-shape table below.
 
 #### GPU
 
-| Backend | Precision | Val box | Val mask | forward | end-to-end | img/s |
-|---|---|---|---:|---:|---:|---:|
-| PyTorch (square) | FP32 | 0.9107 | 0.8420 | 15.29 ms | 18.46 ms | 54.2 |
-| TensorRT | FP16 | 0.9107 | 0.8420 | 4.20 ms | 10.94 ms | 91.4 |
-| ONNX Runtime | FP16 | 0.9110 | 0.8401 | 14.20 ms | 18.05 ms | 55.4 |
-| PyTorch (rect) | FP32 | 0.9115 | 0.8355 | 14.49 ms | 17.83 ms | 56.1 |
-| ONNX Runtime | FP32 | 0.9115 | 0.8355 | 32.04 ms | 26.64 ms | 37.5 |
-| TensorRT | INT8 | 0.8811 | 0.8158 | 3.83 ms | 10.29 ms | 97.2 |
+| Backend | Precision | MB | Val box | Val mask | Δ mask | end-to-end | img/s | spread |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| TensorRT† | FP16 | 23.0 | 0.9107 | 0.8420 | -0.0000 | 9.8 ms | 101.7 | 3% |
+| ONNX Runtime | FP16 | 21.9 | 0.9110 | 0.8401 | +0.0046 | 17.9 ms | 56.0 | 3% |
+| PyTorch | FP32 | 23.3 | 0.9115 | 0.8355 | +0.0000 | 17.9 ms | 55.8 | 1% |
+| ONNX Runtime | FP32 | 42.7 | 0.9115 | 0.8355 | -0.0000 | 26.6 ms | 37.6 | 4% |
+| TensorRT† | INT8 | 17.5 | 0.8811 | 0.8158 | -0.0263 | 9.7 ms | 102.6 | 7% |
 
 #### CPU
 
-| Backend | Precision | Val box | Val mask | forward | end-to-end | img/s |
-|---|---|---|---:|---:|---:|---:|
-| PyTorch (square) | FP32 | 0.9107 | 0.8420 | 170.40 ms | 152.15 ms | 6.6 |
-| ONNX Runtime | FP16 | 0.9110 | 0.8401 | 224.87 ms | 173.71 ms | 5.8 |
-| ONNX Runtime | INT8 (weight-only) | 0.8561 | 0.8372 | 263.27 ms | 206.74 ms | 4.8 |
-| PyTorch (rect) | FP32 | 0.9115 | 0.8355 | 164.77 ms | 140.56 ms | 7.1 |
-| ONNX Runtime | FP32 | 0.9115 | 0.8355 | 172.53 ms | 135.94 ms | 7.4 |
-| OpenVINO | FP32 | 0.9115 | 0.8355 | 122.55 ms | 105.00 ms | 9.5 |
-| OpenVINO | INT8 | 0.8877 | 0.8272 | 89.64 ms | 133.83 ms | 7.5 |
-| ONNX Runtime | INT8 | 0.8552 | 0.8168 | 291.10 ms | 340.38 ms | 2.9 |
+| Backend | Precision | MB | Val box | Val mask | Δ mask | end-to-end | img/s | spread |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| ONNX Runtime | FP16 | 21.9 | 0.9110 | 0.8401 | +0.0046 | 171.4 ms | 5.8 | 2% |
+| ONNX Runtime | INT8 w-only | 11.9 | 0.8561 | 0.8372 | +0.0017 | 199.0 ms | 5.0 | 2% |
+| PyTorch | FP32 | 23.3 | 0.9115 | 0.8355 | +0.0000 | 135.5 ms | 7.4 | 1% |
+| ONNX Runtime | FP32 | 42.7 | 0.9115 | 0.8355 | -0.0000 | 136.9 ms | 7.3 | 3% |
+| OpenVINO | FP32 | 42.0 | 0.9115 | 0.8355 | -0.0000 | 107.6 ms | 9.3 | 9% |
+| OpenVINO† | INT8 | 11.5 | 0.8877 | 0.8272 | -0.0148 | 153.5 ms | 6.5 | 26% |
+| ONNX Runtime† | INT8 | 11.2 | 0.8552 | 0.8168 | -0.0252 | 327.4 ms | 3.0 | 1% |
 
-**FP32 export is numerically exact.** ONNX Runtime and OpenVINO reproduce PyTorch to four
-decimal places on both metrics — the export itself costs nothing.
+#### Backend choice beats quantization
 
-**TensorRT FP16 is the deployment answer: 1.7× faster end-to-end at identical accuracy.**
-The forward pass is 3.6× faster (15.29 → 4.20 ms), but end-to-end only 1.7×, because at
-10.94 ms per frame roughly two-thirds is now letterboxing and mask assembly. **After
-TensorRT the network stops being the bottleneck** — further gains have to come from the
-pipeline, not the model.
+Changing runtime at fixed precision is free — same weights, same numerics, no accuracy
+cost — and it is where nearly all the gain is:
 
-**"INT8" is not one thing.** Same graph, same calibration data, wildly different outcomes:
-TensorRT INT8 is the fastest option here but costs 2.6 mask points; OpenVINO INT8 is the
-best CPU *forward* time (89.64 ms, 1.4× faster than its FP32) yet lands slower end-to-end;
-ONNX Runtime INT8 is worse on both axes at once — 1.9× *slower* than the FP32 it replaced
-and down 5.5 box points. Never carry an INT8 result from one toolchain to another.
+- **GPU: PyTorch → TensorRT FP16 is 1.82×** end-to-end (17.9 → 9.8 ms) at **Δ mask
+  −0.0000**. The network stage alone drops 3.9×.
+- **CPU: ONNX Runtime → OpenVINO at FP32 is 1.27×** (136.9 → 107.6 ms), also free.
+- **Exporting is not automatically optimizing.** ONNX Runtime on CUDA is **1.48× slower than
+  plain PyTorch** (26.6 vs 17.9 ms) on the same graph at the same precision.
 
-Two PyTorch rows appear because a frozen graph must pad the input square while a dynamic one
-keeps the source aspect ratio — worth ~0.7 mask points on its own. Each exported variant is
-compared against the baseline sharing *its* padding, so the deltas reflect quantization
-rather than preprocessing; mistaking one for the other is the easiest way to get this wrong.
+Changing precision does much less, and on this hardware often costs:
+
+| Change | Speed | Accuracy |
+|---|---|---|
+| TensorRT FP16 → INT8 (GPU) | **no reliable gain** (0.99× median, direction flips between runs) | −0.0263 mask |
+| OpenVINO FP32 → INT8 (CPU, equal shape) | 1.20× faster | −0.0148 mask |
+| ONNX Runtime FP32 → INT8 (CPU, equal shape) | **1.62× slower** | −0.0252 mask |
+| ONNX Runtime FP32 → weight-only INT8 | **1.50× slower** | −0.0000 mask |
+
+TensorRT INT8's speed advantage over FP16 did not survive repetition — three sweeps gave
+0.99×, 1.03×, 0.99×, straddling parity. It is a wash that costs 2.6 mask points, so **FP16
+strictly dominates it**.
+
+#### Why the smallest model is also the slowest
+
+`ONNX Runtime INT8` is the smallest artifact (11.2 MB, 3.8× off FP32) and the slowest thing
+measured (327 ms, 3.0 img/s). That is not what INT8 does in general — OpenVINO's INT8, same
+nominal precision and nearly the same size, has the **fastest CPU forward pass here**. The
+difference is visible in the graphs themselves:
+
+| Graph | `Conv` | `QLinearConv` | `ConvInteger` | Quantize/Dequantize | total nodes |
+|---|---:|---:|---:|---:|---:|
+| ONNX FP32 | 117 | 0 | 0 | 0 | 543 |
+| ONNX INT8 (static) | **117** | **0** | 0 | **696** | 1128 |
+| ONNX INT8 (weight-only) | 0 | 0 | **117** | 220 | 1230 |
+
+**The static INT8 graph still contains 117 float `Conv` nodes and zero integer convolution
+kernels.** Quantization changed how weights are *stored*, not how they are *computed*: every
+convolution dequantizes back to float and runs the original FP32 kernel, now wrapped in 696
+added conversion nodes. All the original work, plus overhead — smallest and slowest at once.
+
+The weight-only variant *does* convert its convolutions (117 `ConvInteger`), but recomputes
+activation scales on every forward pass (102 `DynamicQuantizeLinear`), and still loses 1.50×.
+
+Underneath sits the hardware: this CPU reports **AVX2 with no VNNI**, so there is no
+`vpdpbusd`-class instruction to make integer dot products beat float FMA. Even where real
+INT8 compute happens — OpenVINO — the gain is 1.20×, not the 2–3× VNNI silicon would give.
+
+**So INT8 buys size unconditionally, and speed only when the runtime emits integer kernels
+*and* the CPU has instructions that reward them.** Neither is guaranteed by asking for INT8.
+
+#### Equal-shape comparison (CPU)
+
+Removing the padding difference, every backend on identical 640×640 work:
+
+| Backend | Precision | forward @ 640×640 |
+|---|---|---:|
+| OpenVINO | INT8 | 103.8 ms |
+| OpenVINO | FP32 | 124.6 ms |
+| PyTorch | FP32 | 160.7 ms |
+| ONNX Runtime | FP32 | 168.7 ms |
+| ONNX Runtime | FP16 | 220.7 ms |
+| ONNX Runtime | INT8 w-only | 253.6 ms |
+| ONNX Runtime | INT8 | 272.8 ms |
+
+#### The pick
+
+**GPU: TensorRT FP16** — 101.7 img/s at Δ mask −0.0000. A 1.82× speedup costing nothing
+measurable, achieved while processing 1.7× more pixels than the baseline it beats.
+**CPU: OpenVINO FP32** — 9.3 img/s, also lossless.
+
+In both cases the winner is a **backend change at unchanged precision**, and in both cases
+quantizing further trades real accuracy for little or nothing. That inverts the usual
+"quantize for deployment" advice, and it is specific to this hardware — which is why the
+matrix was measured rather than assumed.
+
+One structural note: at 9.8 ms/frame TensorRT spends 3.6 ms in the network and 6.1 ms in
+letterboxing plus prototype-mask assembly, so **the model is no longer the dominant cost**.
+Part of that 6.1 ms is self-inflicted — the engine is frozen square, and its pre/post work
+scales with pixel count at almost exactly the padding ratio (1.66× measured vs 1.67×
+predicted). Rebuilding the engine at 640×384 should recover much of it, so **1.82× is a
+floor, not a ceiling**.
 
 Full matrix (both model sizes, held-out test split, per-stage timings, hardware disclosure):
 [`docs/export_results.md`](docs/export_results.md). The reusable method, written for someone

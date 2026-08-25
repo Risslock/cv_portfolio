@@ -170,6 +170,10 @@ FP16 first (cheap, usually harmless). Then static INT8 with calibration data dra
 real distribution — a few hundred representative images is plenty. Calibration needs to
 cover the *range* of activations, not be statistically representative of the whole dataset.
 
+Then **verify the quantized graph before benchmarking it**: run one inference (it may not
+execute at all — see §5.6) and count op types to confirm integer kernels replaced the float
+ones (§5.3). A file that shrank is not evidence that anything got faster.
+
 ### Step 3 — Measure accuracy, against a shape-matched baseline
 
 Score every artifact on a held-out split. Report the **delta** from the FP32 baseline, not
@@ -260,8 +264,8 @@ fixed preprocessing cost is billed to quantization in every static variant's row
 
 **The same trap corrupts latency, and it is easier to miss there.** A frozen graph must be
 padded to a full square while a dynamic one keeps the source aspect ratio — on 16:9 imagery
-that is ~1.7x the pixels, every frame. Measured here, an INT8 model looked 1.4x *slower*
-end-to-end than its FP32 counterpart while being 1.3x *faster* on an equal-shape forward
+that is ~1.7x the pixels, every frame. Measured here, an INT8 model looked *slower*
+end-to-end than its FP32 counterpart while being 1.20x *faster* on an equal-shape forward
 pass: the quantization was working, and the shape difference more than hid it.
 
 Two defences, and you want both:
@@ -287,6 +291,26 @@ shape-matched baseline:
 The differences come from choices the label "INT8" hides: per-tensor vs. per-channel scales,
 which operations are excluded, whether the calibrator uses min/max or an entropy/percentile
 criterion, and whether the compiler silently keeps some layers in higher precision.
+
+**The decisive one is whether the compute became integer at all.** Counting op types in the
+exported graph settles it in seconds:
+
+| Graph | float `Conv` | integer conv | Quantize/Dequantize | total nodes |
+|---|---:|---:|---:|---:|
+| FP32 | 117 | 0 | 0 | 543 |
+| "INT8" static | **117** | **0** | **696** | 1128 |
+| INT8 weight-only | 0 | 117 | 220 | 1230 |
+
+The middle row is the trap: the file is 3.8x smaller, and *every convolution is still
+float*. Quantization changed how weights are **stored**, not how they are **computed** —
+each conv dequantizes back to float and runs the original kernel, now wrapped in 696 added
+conversion nodes. It does all the original work plus overhead, which is how an artifact ends
+up simultaneously the smallest and the slowest.
+
+So make this a step, not an afterthought: **after quantizing, count the op types.** If you
+do not see integer convolution kernels (`QLinearConv`, `ConvInteger`, or your runtime's
+equivalent) where the float ones used to be, the quantization did not happen in any sense
+that will make it faster — regardless of what the file size says.
 
 **Never generalize an INT8 result from one backend to another.** If INT8 looks unusable,
 try a different toolchain before concluding the model can't be quantized — and check
@@ -343,12 +367,27 @@ names. Give each variant its own directory, and read the artifact path from the 
 backends emit a directory rather than a file.
 
 ### 5.10 Artifact size doesn't tell you the precision used
+See also §5.3: a graph can shrink 3.8x while every convolution stays float.
 An INT8 engine that is no smaller than its FP16 counterpart is a hint that the compiler kept
 many layers in higher precision — most builders pick per-layer tactics and will decline INT8
 where it would be slower. "INT8 built" is not "INT8 ran"; only latency and accuracy
 measurements distinguish them.
 
-### 5.11 Unpinned CPU threads
+### 5.11 One sweep cannot support a small claim
+Backends differ enormously in how repeatable they are. Measured across three identical
+sweeps on one machine: ONNX Runtime and PyTorch cells repeated within 1-4%, while OpenVINO
+cells swung up to **26%**. A 10% difference is therefore noise on one backend and a real
+effect on another, and you cannot tell which from a single run.
+
+Two claims here did not survive repetition: a "7% faster" reading that was really 1.20x
+(understated), and a "1% faster" reading whose direction flipped between runs and was
+actually a wash. Both would have been published from run one.
+
+Repeat the sweep at least three times, report the **median**, and publish the spread next to
+it so a reader can judge each row for themselves. Any effect smaller than its own cell's
+spread should be reported as "no measurable difference", not as a number.
+
+### 5.12 Unpinned CPU threads
 Thread count varies with machine load, so results aren't reproducible. Pin what your stack
 allows and disclose the rest — some runtimes don't expose thread settings through a
 framework wrapper, in which case report the value rather than pretending it was controlled.
