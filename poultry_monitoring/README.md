@@ -12,7 +12,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
 
 - ✅ **Detection** — `yolo26n` tuned, augmented and progressively unfrozen to val mAP50-95 = 0.893, marginally ahead of ChickenVerse's published baseline.
 - ✅ **Segmentation** — baselines and copy-paste arms trained for both sizes, all ahead of the published mask mAP50-95. Copy-paste's effect flips with model size (box mAP50-95 +1.19 on `yolo26n-seg`, −0.72 on `yolo26s-seg`), reproduces on the held-out test split, and scales with scene density — up to **+2.01** on `yolo26n-seg` in the most crowded frames, **−2.30** on `yolo26s-seg`.
-- 🔲 **Next** — ONNX Runtime / OpenVINO / TensorRT export with INT8 quantization, measured accuracy degradation, and CPU-vs-GPU latency benchmarks. DETR remains a secondary track. A DALI data-loading track was scoped and closed after measurement showed the training loop is GPU-bound, not input-bound ([ADR 0019](docs/adr/0019-discard-dali.md)).
+- ✅ **Export & optimization** — 14 artifacts across ONNX Runtime / OpenVINO / TensorRT at FP32/FP16/INT8, accuracy measured against letterbox-matched baselines and latency benchmarked on CPU and GPU. TensorRT FP16 runs **1.7× faster end-to-end at identical accuracy**; FP32 export is numerically exact. DETR remains a secondary track. A DALI data-loading track was scoped and closed after measurement showed the training loop is GPU-bound, not input-bound ([ADR 0019](docs/adr/0019-discard-dali.md)).
 
 ## Table of Contents
 
@@ -24,6 +24,7 @@ Detecting and segmenting individual chickens in dense, high-occlusion overhead p
   - [Held-Out Test Split](#held-out-test-split)
   - [The effect scales with scene density](#the-effect-scales-with-scene-density)
   - [Sample Predictions](#sample-predictions)
+  - [Export & Deployment Cost](#export--deployment-cost)
 - [Usage](#usage)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
@@ -176,6 +177,62 @@ Test-split frames, never used for training or tuning. Boxes only for detection, 
 
 `yolo26s-seg` recovers a few birds `n` misses; both correctly mask a bird almost entirely hidden behind a support pole. Colors are per-instance and random, so they don't correspond between panels.
 
+### Export & Deployment Cost
+
+`yolo26s-seg` + copy-paste — the pick from the tables above — exported across ONNX Runtime,
+OpenVINO and TensorRT at FP32/FP16/INT8, then scored and timed. Accuracy is Validation
+mAP50-95; `forward` is the network alone at a fixed square input, `end-to-end` adds
+letterboxing and mask assembly. Batch 1, RTX 2060 SUPER / Ryzen 5 3600XT. Sorted by mask
+accuracy.
+
+#### GPU
+
+| Backend | Precision | Val box | Val mask | forward | end-to-end | img/s |
+|---|---|---|---:|---:|---:|---:|
+| PyTorch (square) | FP32 | 0.9107 | 0.8420 | 15.29 ms | 18.46 ms | 54.2 |
+| TensorRT | FP16 | 0.9107 | 0.8420 | 4.20 ms | 10.94 ms | 91.4 |
+| ONNX Runtime | FP16 | 0.9110 | 0.8401 | 14.20 ms | 18.05 ms | 55.4 |
+| PyTorch (rect) | FP32 | 0.9115 | 0.8355 | 14.49 ms | 17.83 ms | 56.1 |
+| ONNX Runtime | FP32 | 0.9115 | 0.8355 | 32.04 ms | 26.64 ms | 37.5 |
+| TensorRT | INT8 | 0.8811 | 0.8158 | 3.83 ms | 10.29 ms | 97.2 |
+
+#### CPU
+
+| Backend | Precision | Val box | Val mask | forward | end-to-end | img/s |
+|---|---|---|---:|---:|---:|---:|
+| PyTorch (square) | FP32 | 0.9107 | 0.8420 | 170.40 ms | 152.15 ms | 6.6 |
+| ONNX Runtime | FP16 | 0.9110 | 0.8401 | 224.87 ms | 173.71 ms | 5.8 |
+| ONNX Runtime | INT8 (weight-only) | 0.8561 | 0.8372 | 263.27 ms | 206.74 ms | 4.8 |
+| PyTorch (rect) | FP32 | 0.9115 | 0.8355 | 164.77 ms | 140.56 ms | 7.1 |
+| ONNX Runtime | FP32 | 0.9115 | 0.8355 | 172.53 ms | 135.94 ms | 7.4 |
+| OpenVINO | FP32 | 0.9115 | 0.8355 | 122.55 ms | 105.00 ms | 9.5 |
+| OpenVINO | INT8 | 0.8877 | 0.8272 | 89.64 ms | 133.83 ms | 7.5 |
+| ONNX Runtime | INT8 | 0.8552 | 0.8168 | 291.10 ms | 340.38 ms | 2.9 |
+
+**FP32 export is numerically exact.** ONNX Runtime and OpenVINO reproduce PyTorch to four
+decimal places on both metrics — the export itself costs nothing.
+
+**TensorRT FP16 is the deployment answer: 1.7× faster end-to-end at identical accuracy.**
+The forward pass is 3.6× faster (15.29 → 4.20 ms), but end-to-end only 1.7×, because at
+10.94 ms per frame roughly two-thirds is now letterboxing and mask assembly. **After
+TensorRT the network stops being the bottleneck** — further gains have to come from the
+pipeline, not the model.
+
+**"INT8" is not one thing.** Same graph, same calibration data, wildly different outcomes:
+TensorRT INT8 is the fastest option here but costs 2.6 mask points; OpenVINO INT8 is the
+best CPU *forward* time (89.64 ms, 1.4× faster than its FP32) yet lands slower end-to-end;
+ONNX Runtime INT8 is worse on both axes at once — 1.9× *slower* than the FP32 it replaced
+and down 5.5 box points. Never carry an INT8 result from one toolchain to another.
+
+Two PyTorch rows appear because a frozen graph must pad the input square while a dynamic one
+keeps the source aspect ratio — worth ~0.7 mask points on its own. Each exported variant is
+compared against the baseline sharing *its* padding, so the deltas reflect quantization
+rather than preprocessing; mistaking one for the other is the easiest way to get this wrong.
+
+Full matrix (both model sizes, held-out test split, per-stage timings, hardware disclosure):
+[`docs/export_results.md`](docs/export_results.md). The reusable method, written for someone
+new to quantization: [`docs/optimization_playbook.md`](docs/optimization_playbook.md).
+
 ## Usage
 
 ```bash
@@ -245,7 +302,42 @@ uv run python -m poultry_monitoring.augmentation.visualize \
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
-Export/benchmark entry points don't exist yet — see [`plan.md`](plan.md).
+**Export & optimization** — build the backend/precision matrix, run any artifact, measure what it costs:
+
+```bash
+# Export both checkpoints across ONNX / OpenVINO / TensorRT at FP32, FP16 and INT8.
+# Writes an artifact manifest that the scoring and benchmark stages then enrich in place.
+uv run python -m poultry_monitoring.export --data-dir data/ChickenDet \
+    --weights <checkpoint.pt> [<checkpoint.pt> ...]
+uv run python -m poultry_monitoring.export --data-dir data/ChickenDet --list
+
+# Run any exported artifact on images -- --variant resolves through the manifest,
+# so you never type a path to one of fourteen artifacts.
+uv run python -m poultry_monitoring.inference --list
+uv run python -m poultry_monitoring.inference --data-dir data/ChickenDet \
+    --variant <name> --source <image|dir> --device cpu --save-dir <out>
+
+# Accuracy per variant, each against a letterbox-matched PyTorch baseline, so the
+# delta reported is quantization and not padding (see docs/optimization_playbook.md §5.2).
+uv run python -m poultry_monitoring.segmentation.yolo score \
+    --data-dir data/ChickenDet --splits Validation Test
+
+# Latency/throughput under constitution Principle V: warmup excluded, averaged,
+# hardware/batch/precision/device recorded with every number.
+uv run python -m poultry_monitoring.benchmark --data-dir data/ChickenDet --batch 1 4 8
+
+# Join both into the committed report. The raw JSON lives under the gitignored data/
+# tree, so this markdown is the record that survives a clone.
+uv run python -m poultry_monitoring.benchmark --data-dir data/ChickenDet     --summary docs/export_results.md
+```
+
+Full results, with hardware and method disclosed per constitution Principle V:
+[`docs/export_results.md`](docs/export_results.md).
+
+> **New to model optimization?** [`docs/optimization_playbook.md`](docs/optimization_playbook.md)
+> is a standalone, project-agnostic guide — quantization concepts from scratch, a decision
+> map for picking a backend and precision, a step-by-step procedure, and a catalogue of the
+> failure modes that produce *plausible but wrong* numbers rather than errors.
 
 ## Tech Stack
 
@@ -254,7 +346,7 @@ Export/benchmark entry points don't exist yet — see [`plan.md`](plan.md).
 - **[MLflow](https://mlflow.org/)** — experiment tracking, local SQLite store
 - **PyTorch** — underlying training framework
 - **[DETR](https://huggingface.co/docs/transformers/model_doc/detr)** — transformer-based detector; a secondary practice track
-- **[ONNX Runtime](https://onnxruntime.ai/)**, **[OpenVINO](https://docs.openvino.ai/)**, **[TensorRT](https://developer.nvidia.com/tensorrt)** — planned, for export/quantization and latency benchmarking
+- **[ONNX Runtime](https://onnxruntime.ai/)**, **[OpenVINO](https://docs.openvino.ai/)** (INT8 via NNCF), **[TensorRT](https://developer.nvidia.com/tensorrt)** — export, quantization and latency benchmarking
 
 ## Architecture
 
