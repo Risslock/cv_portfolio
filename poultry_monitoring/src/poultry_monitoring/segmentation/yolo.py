@@ -449,6 +449,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=None, help="Write the results dict here as JSON."
     )
 
+    score_parser = subparsers.add_parser(
+        "score",
+        help="Score every exported artifact in the export manifest and record the "
+        "quantization delta against its shape-matched PyTorch baseline.",
+    )
+    score_parser.add_argument("--data-dir", type=Path, required=True, help="ChickenDet root.")
+    score_parser.add_argument(
+        "--manifest", type=Path, default=None, help="Defaults to <data-dir>/YOLO/export/."
+    )
+    score_parser.add_argument(
+        "--variants", type=str, nargs="+", default=None, help="Manifest keys. Default: all."
+    )
+    score_parser.add_argument(
+        "--splits",
+        type=str,
+        nargs="+",
+        default=["Validation", "Test"],
+        help="Splits to score each artifact on.",
+    )
+    score_parser.add_argument("--batch", type=int, default=8)
+    score_parser.add_argument("--imgsz", type=int, default=640)
+    score_parser.add_argument("--workers", type=int, default=0)
+    score_parser.add_argument("--output", type=Path, default=None)
+
     ttp_parser = subparsers.add_parser(
         "ttp",
         help="Compare test-time-only preprocessing (autocontrast/CLAHE/hist-eq/"
@@ -540,6 +564,36 @@ def main() -> None:
                 imgsz=args.imgsz,
                 workers=args.workers,
             )
+        print(json.dumps(results, indent=2))
+        if args.output is not None:
+            args.output.write_text(json.dumps(results, indent=2))
+            print(f"Saved to {args.output}")
+        return
+
+    if args.command == "score":
+        from poultry_monitoring.export import default_manifest_path
+        from poultry_monitoring.segmentation.evaluation import accuracy_deltas, score_manifest
+
+        data_dir = args.data_dir.resolve()
+        project = data_dir / "YOLO"
+        manifest_path = args.manifest or default_manifest_path(data_dir)
+        data_yaml = prepare_data(data_dir, CLASS_NAMES)
+        scored = score_manifest(
+            manifest_path,
+            data_yaml,
+            project,
+            splits=tuple(args.splits),
+            variants=args.variants,
+            batch=args.batch,
+            imgsz=args.imgsz,
+            workers=args.workers,
+        )
+        results = {
+            "scored": scored,
+            "deltas_vs_baseline": {
+                split: accuracy_deltas(manifest_path, split=split) for split in args.splits
+            },
+        }
         print(json.dumps(results, indent=2))
         if args.output is not None:
             args.output.write_text(json.dumps(results, indent=2))
