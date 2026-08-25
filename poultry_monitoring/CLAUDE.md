@@ -130,12 +130,29 @@ uv run python -m poultry_monitoring.segmentation.yolo train --data-dir <dir> --c
 # held-out evaluation — --split Test is deliberately opt-in; --by-density reproduces the README's density figure
 uv run python -m poultry_monitoring.segmentation.yolo val --data-dir <dir> --weights <pt> --split Test --by-density
 
+# Phase 6 export/optimization — export writes an artifact manifest the later stages enrich
+uv run python -m poultry_monitoring.export --data-dir <dir> --weights <pt> [<pt> ...]  # full matrix
+uv run python -m poultry_monitoring.export --data-dir <dir> --variants onnx-fp32 --weights <pt>  # one cell
+uv run python -m poultry_monitoring.export --data-dir <dir> --list                     # show the manifest
+
+# inference.py — run ANY exported artifact (images only); --variant resolves via the manifest
+uv run python -m poultry_monitoring.inference --list
+uv run python -m poultry_monitoring.inference --data-dir <dir> --variant <name> --source <img> --device cpu
+
+# benchmark.py — latency/throughput per constitution Principle V (warmup excluded, averaged)
+uv run python -m poultry_monitoring.benchmark --data-dir <dir> --batch 1 4 8
+
+# join accuracy (manifest) + latency (benchmark_results.json) into the COMMITTED report.
+# The JSON results live under the gitignored /data/, so docs/export_results.md is the
+# durable record -- regenerate it after any re-export/re-score/re-benchmark, never hand-edit.
+uv run python -m poultry_monitoring.benchmark --data-dir <dir> --summary docs/export_results.md
+
 # augmentation/visualize.py CLI — pure Albumentations/numpy, no torch import, safe to
 # run alongside a live GPU training job (unlike anything above, which all touch torch)
 uv run python -m poultry_monitoring.augmentation.visualize --image <img> --label <txt>  # before/after grid + boxes
 ```
 
-Export/benchmark CLI entry points don't exist yet — Phase 6 in `plan.md`. Update this section as they're built; keep `README.md`'s usage examples in sync too.
+**Export/inference/benchmark gotchas that are already handled — don't undo them** (see [ADR 0020](docs/adr/0020-export-quantization-matrix.md)): `YOLO_AUTOINSTALL=false` is set at the top of `export.py`/`inference.py`/`benchmark.py` **before** the ultralytics import, because otherwise loading an ONNX model on CPU pip-installs `onnxruntime` next to the pinned `onnxruntime-gpu` and breaks both. `inference.load_model` always passes `task="segment"` (an exported `best.onnx` otherwise silently scores as `detect`, with no mask metrics) and registers torch's `lib/` on the Windows DLL path (ONNX Runtime's CUDA provider can't find CUDA/cuDNN otherwise, and falls back to CPU *without raising*). Always check `describe_runtime()`'s `providers` before believing a GPU number.
 
 ## Gitignore Reminders
 
