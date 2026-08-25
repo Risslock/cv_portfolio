@@ -15,6 +15,7 @@ from poultry_monitoring.benchmark import (
     build_summary,
     devices_for,
     hardware_fingerprint,
+    letterbox_for,
     measure_latency,
 )
 
@@ -44,6 +45,22 @@ class TestDevicesFor:
 
     def test_unknown_backend_defers_to_ultralytics(self):
         assert devices_for({"backend": "something-new"}) == [None]
+
+
+class TestLetterboxFor:
+    def test_frozen_graphs_pad_square(self):
+        assert letterbox_for({"backend": "tensorrt", "dynamic": False}) == "square"
+
+    def test_dynamic_graphs_keep_aspect_ratio(self):
+        assert letterbox_for({"backend": "onnx", "dynamic": True}) == "rect"
+
+    @pytest.mark.parametrize("dynamic", [True, False])
+    def test_pytorch_always_pads_rect_whatever_its_baseline_flag_says(self, dynamic):
+        # `dynamic` on a PyTorch entry selects which *accuracy* baseline it represents
+        # (val(rect=False) vs val(rect=True)); predict() has no rect argument and a .pt has
+        # no frozen shape, so the runtime padding is rect either way. Reading the flag here
+        # claimed a latency difference that measurement showed did not exist.
+        assert letterbox_for({"backend": "pytorch", "dynamic": dynamic}) == "rect"
 
 
 class TestMeasureLatency:

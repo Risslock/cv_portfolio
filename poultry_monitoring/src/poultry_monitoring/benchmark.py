@@ -59,6 +59,7 @@ from poultry_monitoring.inference import (  # noqa: E402
 DEFAULT_WARMUP = 10
 DEFAULT_ITERATIONS_GPU = 100
 DEFAULT_ITERATIONS_CPU = 30  # CPU FP32 runs ~250 ms/image; 30 keeps a cell near 10 s
+STAGE_PROBES = 5  # the per-stage split is averaged; one call is too noisy to decompose e2e
 
 
 @dataclass
@@ -218,7 +219,7 @@ def benchmark_variant(
     warmup: int = DEFAULT_WARMUP,
     iterations: int | None = None,
     cpu_threads: int | None = None,
-    entry_is_dynamic: bool = True,
+    letterbox: str = "rect",
 ) -> dict[str, object]:
     """Measure one (artifact x device x batch) cell, both forward and end-to-end.
 
@@ -234,8 +235,11 @@ def benchmark_variant(
         warmup: Warmup iterations, discarded.
         iterations: Timed iterations. Defaults by device, since CPU cells are ~10x slower.
         cpu_threads: Torch thread count to pin, for reproducible CPU numbers.
-        entry_is_dynamic: Whether the artifact has a symbolic input shape. Recorded so the
-            end-to-end column can be read within its shape class rather than across it.
+        letterbox: How `predict()` actually pads this artifact -- `"rect"` (aspect-ratio)
+            or `"square"`. Recorded so the end-to-end column is read within its shape class
+            rather than across it. This is a property of the *runtime*, not of how the
+            artifact was scored: a `.pt` always pads rect regardless of the `dynamic` flag
+            its manifest entry carries for accuracy-baseline purposes.
 
     Returns:
         Dict with `runtime` (observed providers/device), `forward` and `end_to_end` stats,
@@ -295,10 +299,16 @@ def benchmark_variant(
     # end-to-end, so an end-to-end comparison is only fair *within* a shape class -- the
     # same confound that `export.baseline_for` handles on the accuracy side. `forward` is
     # immune, since it pins every backend to the same square tensor.
-    probe = model.predict(batch_images[:1], imgsz=imgsz, device=device, verbose=False)[0]
-    result["stage_ms"] = {k: round(v, 3) for k, v in probe.speed.items()}
+    # Averaged over several probes, not one: a single call is noisy enough to disagree with
+    # the averaged end-to-end figure it is meant to decompose.
+    stages: list[dict] = []
+    for _ in range(STAGE_PROBES):
+        probe = model.predict(batch_images[:1], imgsz=imgsz, device=device, verbose=False)[0]
+        stages.append(dict(probe.speed))
+    result["stage_ms"] = {k: round(statistics.fmean(x[k] for x in stages), 3) for k in stages[0]}
+    result["stage_probes"] = len(stages)
     result["inference_shape"] = list(getattr(probe, "orig_shape", ()) or ())
-    result["letterbox"] = "rect" if entry_is_dynamic else "square"
+    result["letterbox"] = letterbox
     return result
 
 
@@ -469,6 +479,29 @@ def build_summary(manifest_path: Path, results_path: Path, repo_root: Path) -> s
     return "\n".join(out) + "\n"
 
 
+def letterbox_for(entry: dict) -> str:
+    """How `predict()` will actually pad this artifact at runtime.
+
+    Deliberately not just `entry["dynamic"]`. That flag serves the *accuracy* comparison --
+    it selects which baseline a variant is scored against -- and the two PyTorch baselines
+    carry `dynamic=False`/`True` to represent one checkpoint scored under `val(rect=False)`
+    and `val(rect=True)`. But `predict()` takes no `rect` argument and a `.pt` has no frozen
+    input shape, so a PyTorch model always pads to the source aspect ratio whichever baseline
+    row it stands in. Labelling it "square" claimed a runtime difference that does not exist,
+    and the measurements said so: the two PyTorch rows' inference stages matched within 1%
+    where a real square/rect split would differ by ~1.7x.
+
+    Args:
+        entry: Manifest entry carrying `backend` and `dynamic`.
+
+    Returns:
+        `"rect"` or `"square"`.
+    """
+    if entry.get("backend") == "pytorch":
+        return "rect"
+    return "rect" if entry.get("dynamic") else "square"
+
+
 def devices_for(entry: dict) -> list[str | int | None]:
     """List the devices an artifact can actually run on.
 
@@ -577,7 +610,7 @@ def main() -> None:
                         warmup=args.warmup,
                         iterations=args.iterations,
                         cpu_threads=args.cpu_threads,
-                        entry_is_dynamic=bool(entry.get("dynamic")),
+                        letterbox=letterbox_for(entry),
                     )
                 except Exception as error:  # noqa: BLE001 - keep sweeping other cells
                     print(f"FAIL  {label}  {type(error).__name__}: {error}")
