@@ -12,6 +12,7 @@ from poultry_monitoring.benchmark import (
     DEFAULT_ITERATIONS_CPU,
     DEFAULT_ITERATIONS_GPU,
     DEFAULT_WARMUP,
+    aggregate_results,
     build_summary,
     devices_for,
     hardware_fingerprint,
@@ -226,3 +227,55 @@ class TestBuildSummary:
         # A bare pipe would split the cell into extra columns and break the table.
         assert "engine-int8\|cuda\|b1" in row
         assert row.replace("\|", "\x00").count("|") == 9
+
+
+class TestAggregateResults:
+    def _write(self, tmp_path, name, e2e, fwd=None):
+        import json
+
+        cell = {"end_to_end": {"mean_ms": e2e, "throughput_img_per_sec": 1000 / e2e}}
+        if fwd is not None:
+            cell["forward"] = {"mean_ms": fwd}
+        p = tmp_path / name
+        p.write_text(json.dumps({"hardware": {"gpu": "x"}, "results": {"m__v|cpu|b1": cell}}))
+        return p
+
+    def test_takes_the_median_not_the_mean(self, tmp_path):
+        # An outlier run must not drag the published number, which is the whole reason
+        # repeats exist.
+        paths = [
+            self._write(tmp_path, f"r{i}.json", e2e) for i, e2e in enumerate([100.0, 104.0, 300.0])
+        ]
+        out = aggregate_results(paths)["results"]["m__v|cpu|b1"]
+        assert out["end_to_end"]["mean_ms"] == 104.0
+
+    def test_records_spread_so_a_noisy_cell_is_visible(self, tmp_path):
+        paths = [
+            self._write(tmp_path, f"r{i}.json", e2e) for i, e2e in enumerate([100.0, 200.0, 150.0])
+        ]
+        out = aggregate_results(paths)["results"]["m__v|cpu|b1"]
+        assert out["spread_pct"] == pytest.approx(66.7, abs=0.1)
+        assert out["runs"] == 3
+
+    def test_medians_the_forward_block_too(self, tmp_path):
+        paths = [
+            self._write(tmp_path, f"r{i}.json", 100.0, fwd=f)
+            for i, f in enumerate([10.0, 12.0, 50.0])
+        ]
+        assert aggregate_results(paths)["results"]["m__v|cpu|b1"]["forward"]["mean_ms"] == 12.0
+
+    def test_a_single_run_still_aggregates(self, tmp_path):
+        out = aggregate_results([self._write(tmp_path, "r.json", 42.0)])["results"]["m__v|cpu|b1"]
+        assert out["end_to_end"]["mean_ms"] == 42.0
+        assert "spread_pct" not in out  # nothing to spread across
+
+    def test_failed_cells_survive_rather_than_crashing(self, tmp_path):
+        import json
+
+        p = tmp_path / "r.json"
+        p.write_text(json.dumps({"hardware": {}, "results": {"m__v|cpu|b1": {"error": "OOM"}}}))
+        assert "error" in aggregate_results([p])["results"]["m__v|cpu|b1"]
+
+    def test_rejects_an_empty_file_list(self):
+        with pytest.raises(ValueError, match="at least one"):
+            aggregate_results([])

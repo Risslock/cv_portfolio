@@ -78,13 +78,13 @@ happened during Phase 6 development, not in theory.
 
 The static/dynamic padding difference was caught early on the accuracy side and handled by
 `baseline_for`. The same discipline was **not** applied to latency, and it produced a
-confidently wrong conclusion: `openvino-int8` measured 1.44x *slower* end-to-end than
+confidently wrong conclusion: `openvino-int8` measured slower end-to-end than
 `openvino-fp32`, which read as "INT8 doesn't pay off on this CPU".
 
 It does. The INT8 artifact is static, so `predict()` pads it to a full 640x640 while the
 dynamic FP32 artifact keeps 640x384 — about 1.7x the pixels, in both the inference stage and
 the mask assembly that follows it. Measured at an identical square shape via the forward
-pass, OpenVINO INT8 is **1.24-1.30x faster** than FP32 (medians, both model sizes).
+pass, OpenVINO INT8 is **1.20x faster** than FP32 (median of three sweeps).
 
 Two hypotheses were tested and rejected before finding this: that degraded INT8 produced
 more detections and so more mask work (detection counts are identical, 55.3 vs 55.5 per
@@ -98,9 +98,9 @@ shape-matched baselines on the held-out test split:
 
 | Toolchain | Δ box mAP50-95 | Δ mask mAP50-95 | Forward vs. its FP32 |
 |---|---|---|---|
-| TensorRT | −0.009 | −0.008 | ~1.0x (small model), faster (large) |
-| OpenVINO (NNCF) | −0.014 | −0.008 | **1.24-1.30x faster** |
-| ONNX Runtime static | **−0.113** | −0.036 | **1.68-1.89x slower** |
+| TensorRT | −0.009 | −0.008 | no reliable gain over FP16 (0.99x median; direction flips across runs) |
+| OpenVINO (NNCF) | −0.014 | −0.008 | **1.20x faster** |
+| ONNX Runtime static | **−0.113** | −0.036 | **1.62x slower** |
 
 ONNX Runtime's static INT8 is worse on both axes at once — an order of magnitude more
 accuracy damage *and* slower than the FP32 it replaced. Nothing about the label "INT8"

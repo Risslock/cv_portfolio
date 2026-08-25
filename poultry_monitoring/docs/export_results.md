@@ -76,34 +76,34 @@ class. The two are not subtractable.
 
 | Cell | Letterbox | forward mean | median | p95 | end-to-end | img/s | pre / inf / post |
 |---|---|---|---|---|---|---|---|
-| `yolo26n-seg-baseline-adamw__engine-fp16\|cuda\|b1` | square | 3.04 | 2.95 | 3.85 | 11.26 | 88.8 | 2.58 / 3.31 / 3.79 |
-| `yolo26n-seg-baseline-adamw__engine-int8\|cuda\|b1` | square | 3.24 | 3.08 | 4.05 | 11.01 | 90.8 | 2.83 / 3.73 / 3.73 |
-| `yolo26n-seg-baseline-adamw__onnx-fp16\|cpu\|b1` | rect | 94.75 | 92.78 | 111.36 | 128.47 | 7.8 | 1.72 / 82.88 / 43.48 |
-| `yolo26n-seg-baseline-adamw__onnx-fp16\|cuda\|b1` | rect | 14.14 | 14.02 | 15.85 | 18.16 | 55.1 | 1.45 / 13.59 / 3.20 |
-| `yolo26n-seg-baseline-adamw__onnx-fp32\|cpu\|b1` | rect | 72.21 | 67.84 | 83.97 | 78.37 | 12.8 | 1.12 / 40.16 / 32.82 |
-| `yolo26n-seg-baseline-adamw__onnx-fp32\|cuda\|b1` | rect | 22.87 | 22.78 | 24.80 | 21.65 | 46.2 | 1.29 / 16.78 / 2.78 |
-| `yolo26n-seg-baseline-adamw__onnx-int8\|cpu\|b1` | square | 125.22 | 119.80 | 186.03 | 188.31 | 5.3 | 3.30 / 129.60 / 61.12 |
-| `yolo26n-seg-baseline-adamw__onnx-w8a32\|cpu\|b1` | rect | 120.08 | 120.96 | 136.10 | 108.03 | 9.3 | 1.14 / 71.95 / 31.36 |
-| `yolo26n-seg-baseline-adamw__openvino-fp32\|cpu\|b1` | rect | 66.43 | 66.92 | 99.31 | 65.25 | 15.3 | 1.24 / 32.82 / 29.18 |
-| `yolo26n-seg-baseline-adamw__openvino-int8\|cpu\|b1` | square | 39.60 | 39.23 | 47.20 | 95.26 | 10.5 | 2.42 / 46.54 / 47.18 |
-| `yolo26n-seg-baseline-adamw__pytorch-fp32-dynamic\|cpu\|b1` | rect | 75.93 | 75.73 | 79.76 | 84.86 | 11.8 | 1.25 / 53.71 / 28.11 |
-| `yolo26n-seg-baseline-adamw__pytorch-fp32-dynamic\|cuda\|b1` | rect | 14.39 | 13.48 | 21.27 | 17.97 | 55.6 | 1.20 / 13.31 / 2.86 |
-| `yolo26n-seg-baseline-adamw__pytorch-fp32-static\|cpu\|b1` | rect | 74.67 | 74.59 | 77.32 | 82.71 | 12.1 | 1.14 / 52.58 / 27.70 |
-| `yolo26n-seg-baseline-adamw__pytorch-fp32-static\|cuda\|b1` | rect | 13.35 | 13.27 | 14.13 | 17.44 | 57.4 | 1.22 / 13.48 / 2.71 |
-| `yolo26s-seg-synth_copy_paste__engine-fp16\|cuda\|b1` | square | 3.56 | 3.50 | 4.06 | 9.83 | 101.7 | 2.62 / 3.57 / 3.52 |
-| `yolo26s-seg-synth_copy_paste__engine-int8\|cuda\|b1` | square | 3.42 | 3.33 | 3.88 | 9.74 | 102.6 | 2.50 / 3.52 / 3.58 |
-| `yolo26s-seg-synth_copy_paste__onnx-fp16\|cpu\|b1` | rect | 235.63 | 228.36 | 269.11 | 168.67 | 5.9 | 1.16 / 138.39 / 32.36 |
-| `yolo26s-seg-synth_copy_paste__onnx-fp16\|cuda\|b1` | rect | 14.36 | 14.47 | 15.30 | 18.36 | 54.5 | 1.30 / 14.45 / 2.85 |
-| `yolo26s-seg-synth_copy_paste__onnx-fp32\|cpu\|b1` | rect | 167.31 | 168.04 | 172.90 | 134.21 | 7.5 | 1.19 / 99.31 / 28.67 |
-| `yolo26s-seg-synth_copy_paste__onnx-fp32\|cuda\|b1` | rect | 33.76 | 33.14 | 38.28 | 27.51 | 36.4 | 1.29 / 21.78 / 2.88 |
-| `yolo26s-seg-synth_copy_paste__onnx-int8\|cpu\|b1` | square | 286.69 | 281.17 | 329.06 | 326.02 | 3.1 | 2.14 / 275.61 / 55.16 |
-| `yolo26s-seg-synth_copy_paste__onnx-w8a32\|cpu\|b1` | rect | 251.91 | 251.49 | 262.23 | 195.94 | 5.1 | 1.15 / 158.03 / 37.88 |
-| `yolo26s-seg-synth_copy_paste__openvino-fp32\|cpu\|b1` | rect | 124.59 | 121.60 | 158.34 | 104.66 | 9.6 | 1.26 / 72.91 / 28.58 |
-| `yolo26s-seg-synth_copy_paste__openvino-int8\|cpu\|b1` | square | 115.60 | 124.93 | 130.99 | 164.54 | 6.1 | 2.40 / 122.53 / 48.12 |
-| `yolo26s-seg-synth_copy_paste__pytorch-fp32-dynamic\|cpu\|b1` | rect | 162.52 | 161.63 | 170.25 | 135.54 | 7.4 | 1.10 / 105.35 / 27.11 |
-| `yolo26s-seg-synth_copy_paste__pytorch-fp32-dynamic\|cuda\|b1` | rect | 14.42 | 14.31 | 15.09 | 17.76 | 56.3 | 1.21 / 13.74 / 2.50 |
-| `yolo26s-seg-synth_copy_paste__pytorch-fp32-static\|cpu\|b1` | rect | 162.37 | 161.90 | 169.65 | 134.98 | 7.4 | 1.14 / 111.42 / 27.36 |
-| `yolo26s-seg-synth_copy_paste__pytorch-fp32-static\|cuda\|b1` | rect | 14.48 | 14.38 | 15.23 | 17.75 | 56.3 | 1.21 / 13.82 / 2.58 |
+| `yolo26n-seg-baseline-adamw__engine-fp16\|cuda\|b1` | square | 3.24 | 3.21 | 3.85 | 9.60 | 104.2 | 2.17 / 3.23 / 3.50 |
+| `yolo26n-seg-baseline-adamw__engine-int8\|cuda\|b1` | square | 3.29 | 3.18 | 3.89 | 9.71 | 103.0 | 2.28 / 3.54 / 3.34 |
+| `yolo26n-seg-baseline-adamw__onnx-fp16\|cpu\|b1` | rect | 89.93 | 90.05 | 92.80 | 97.68 | 10.2 | 1.16 / 55.63 / 34.61 |
+| `yolo26n-seg-baseline-adamw__onnx-fp16\|cuda\|b1` | rect | 14.14 | 14.02 | 16.98 | 18.16 | 55.1 | 1.22 / 13.52 / 3.03 |
+| `yolo26n-seg-baseline-adamw__onnx-fp32\|cpu\|b1` | rect | 67.18 | 67.31 | 68.88 | 78.07 | 12.8 | 1.26 / 40.87 / 37.60 |
+| `yolo26n-seg-baseline-adamw__onnx-fp32\|cuda\|b1` | rect | 22.77 | 22.36 | 24.80 | 21.55 | 46.4 | 1.24 / 16.07 / 2.69 |
+| `yolo26n-seg-baseline-adamw__onnx-int8\|cpu\|b1` | square | 122.62 | 119.80 | 128.05 | 180.07 | 5.5 | 2.28 / 124.61 / 55.53 |
+| `yolo26n-seg-baseline-adamw__onnx-w8a32\|cpu\|b1` | rect | 118.26 | 117.73 | 124.87 | 108.03 | 9.3 | 1.17 / 73.54 / 34.44 |
+| `yolo26n-seg-baseline-adamw__openvino-fp32\|cpu\|b1` | rect | 51.85 | 52.66 | 62.11 | 61.54 | 16.2 | 1.16 / 30.55 / 27.20 |
+| `yolo26n-seg-baseline-adamw__openvino-int8\|cpu\|b1` | square | 39.60 | 39.23 | 47.20 | 91.18 | 11.0 | 2.44 / 41.47 / 47.49 |
+| `yolo26n-seg-baseline-adamw__pytorch-fp32-dynamic\|cpu\|b1` | rect | 74.32 | 74.23 | 77.42 | 82.60 | 12.1 | 1.19 / 53.15 / 27.50 |
+| `yolo26n-seg-baseline-adamw__pytorch-fp32-dynamic\|cuda\|b1` | rect | 13.47 | 13.32 | 14.30 | 17.46 | 57.3 | 1.24 / 13.32 / 2.74 |
+| `yolo26n-seg-baseline-adamw__pytorch-fp32-static\|cpu\|b1` | rect | 73.68 | 73.15 | 76.75 | 82.71 | 12.1 | 1.08 / 52.83 / 27.78 |
+| `yolo26n-seg-baseline-adamw__pytorch-fp32-static\|cuda\|b1` | rect | 13.35 | 13.27 | 14.13 | 17.44 | 57.4 | 1.22 / 13.33 / 2.81 |
+| `yolo26s-seg-synth_copy_paste__engine-fp16\|cuda\|b1` | square | 3.75 | 3.77 | 4.32 | 9.83 | 101.7 | 2.19 / 3.66 / 3.45 |
+| `yolo26s-seg-synth_copy_paste__engine-int8\|cuda\|b1` | square | 3.62 | 3.56 | 4.00 | 9.74 | 102.6 | 2.20 / 3.74 / 3.39 |
+| `yolo26s-seg-synth_copy_paste__onnx-fp16\|cpu\|b1` | rect | 220.71 | 220.88 | 225.94 | 171.41 | 5.8 | 1.25 / 137.25 / 32.34 |
+| `yolo26s-seg-synth_copy_paste__onnx-fp16\|cuda\|b1` | rect | 14.36 | 14.47 | 15.77 | 17.86 | 56.0 | 1.26 / 12.82 / 2.74 |
+| `yolo26s-seg-synth_copy_paste__onnx-fp32\|cpu\|b1` | rect | 168.72 | 169.15 | 173.88 | 136.85 | 7.3 | 1.25 / 101.62 / 31.42 |
+| `yolo26s-seg-synth_copy_paste__onnx-fp32\|cuda\|b1` | rect | 32.34 | 32.06 | 34.09 | 26.57 | 37.6 | 1.31 / 22.02 / 2.80 |
+| `yolo26s-seg-synth_copy_paste__onnx-int8\|cpu\|b1` | square | 272.83 | 271.69 | 283.84 | 327.35 | 3.0 | 2.72 / 267.48 / 54.90 |
+| `yolo26s-seg-synth_copy_paste__onnx-w8a32\|cpu\|b1` | rect | 253.58 | 251.78 | 262.23 | 198.98 | 5.0 | 1.26 / 159.47 / 36.44 |
+| `yolo26s-seg-synth_copy_paste__openvino-fp32\|cpu\|b1` | rect | 124.59 | 122.24 | 165.36 | 107.64 | 9.3 | 1.19 / 80.58 / 28.26 |
+| `yolo26s-seg-synth_copy_paste__openvino-int8\|cpu\|b1` | square | 103.85 | 113.35 | 130.99 | 153.53 | 6.5 | 2.65 / 96.34 / 46.47 |
+| `yolo26s-seg-synth_copy_paste__pytorch-fp32-dynamic\|cpu\|b1` | rect | 160.68 | 161.00 | 164.58 | 135.54 | 7.4 | 1.15 / 107.10 / 27.81 |
+| `yolo26s-seg-synth_copy_paste__pytorch-fp32-dynamic\|cuda\|b1` | rect | 14.42 | 14.31 | 15.12 | 17.94 | 55.8 | 1.51 / 14.42 / 2.62 |
+| `yolo26s-seg-synth_copy_paste__pytorch-fp32-static\|cpu\|b1` | rect | 162.37 | 161.57 | 169.65 | 134.98 | 7.4 | 1.38 / 106.52 / 27.83 |
+| `yolo26s-seg-synth_copy_paste__pytorch-fp32-static\|cuda\|b1` | rect | 14.48 | 14.38 | 15.24 | 17.87 | 56.0 | 1.36 / 14.54 / 2.69 |
 
 ## Artifacts
 

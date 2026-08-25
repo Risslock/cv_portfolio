@@ -479,6 +479,58 @@ def build_summary(manifest_path: Path, results_path: Path, repo_root: Path) -> s
     return "\n".join(out) + "\n"
 
 
+def aggregate_results(paths: list[Path]) -> dict:
+    """Combine repeated sweeps into per-cell medians, with the observed spread recorded.
+
+    A single sweep cannot support a small claim. Backends differ enormously in how stable
+    they are -- ONNX Runtime and PyTorch cells here repeat within 1-4%, while OpenVINO
+    swings up to 26% -- so a 10% difference measured once may be noise on one backend and a
+    real effect on another. Taking the median across runs and publishing `spread_pct`
+    alongside it lets a reader see which is which instead of trusting a lone number.
+
+    Args:
+        paths: Result files from separate sweeps of the same matrix.
+
+    Returns:
+        A results payload of the same shape, whose `forward`/`end_to_end` statistics are
+        per-cell medians, plus `runs` and `spread_pct` (end-to-end peak-to-peak as a
+        percentage of the median) on every cell.
+
+    Raises:
+        ValueError: If no paths are given.
+    """
+    if not paths:
+        raise ValueError("aggregate_results needs at least one results file")
+    payloads = [json.loads(Path(p).read_text()) for p in paths]
+    merged: dict[str, dict] = {}
+    for key in sorted({k for p in payloads for k in p.get("results", {})}):
+        cells = [p["results"][key] for p in payloads if key in p.get("results", {})]
+        usable = [c for c in cells if "error" not in c]
+        if not usable:
+            merged[key] = cells[0]
+            continue
+        out = dict(usable[-1])
+        for block in ("forward", "end_to_end"):
+            present = [c[block] for c in usable if block in c]
+            if not present:
+                continue
+            out[block] = {
+                k: (
+                    round(statistics.median(x[k] for x in present), 3)
+                    if isinstance(present[0][k], (int, float))
+                    else present[0][k]
+                )
+                for k in present[0]
+            }
+        totals = [c["end_to_end"]["mean_ms"] for c in usable if "end_to_end" in c]
+        if len(totals) > 1:
+            median = statistics.median(totals)
+            out["spread_pct"] = round(100 * (max(totals) - min(totals)) / median, 1)
+        out["runs"] = len(usable)
+        merged[key] = out
+    return {"hardware": payloads[-1].get("hardware", {}), "results": merged}
+
+
 def letterbox_for(entry: dict) -> str:
     """How `predict()` will actually pad this artifact at runtime.
 
@@ -555,6 +607,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=None, help="Write results JSON here.")
     parser.add_argument("--no-mlflow", action="store_true", help="Skip MLflow logging.")
     parser.add_argument(
+        "--aggregate",
+        type=Path,
+        nargs="+",
+        default=None,
+        help="Combine repeated sweep result files into per-cell medians with the observed "
+        "spread, write to --output, then exit. Use for claims smaller than run-to-run noise.",
+    )
+    parser.add_argument(
         "--summary",
         type=Path,
         default=None,
@@ -572,6 +632,19 @@ def main() -> None:
     args = _build_arg_parser().parse_args()
     data_dir = args.data_dir.resolve()
     manifest_path = args.manifest or default_manifest_path(data_dir)
+
+    if args.aggregate is not None:
+        payload = aggregate_results(args.aggregate)
+        out = args.output or data_dir / "YOLO" / "export" / "benchmark_results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2))
+        widest = max(
+            ((c.get("spread_pct", 0.0), k) for k, c in payload["results"].items()),
+            default=(0.0, "-"),
+        )
+        print(f"Aggregated {len(args.aggregate)} runs into {out}")
+        print(f"  {len(payload['results'])} cells; widest spread {widest[0]}% ({widest[1]})")
+        return
 
     if args.summary is not None:
         # Repo root: this file is src/poultry_monitoring/benchmark.py.
