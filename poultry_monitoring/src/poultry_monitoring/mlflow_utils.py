@@ -41,6 +41,33 @@ def configure_ultralytics_mlflow(experiment_name: str, tracking_uri: str = TRACK
     ultralytics_settings.update({"mlflow": True})
 
 
+def start_benchmark_run(
+    run_name: str,
+    experiment_name: str = SEGMENTATION_EXPERIMENT,
+    tracking_uri: str = TRACKING_URI,
+) -> str:
+    """Open an MLflow run for work that never calls `model.train()`.
+
+    Every other run in this project is started by Ultralytics' own MLflow callback from
+    inside `model.train()` — `configure_ultralytics_mlflow` only sets the env vars that
+    callback reads, so it cannot open a run on its own. Export/benchmark runs have no
+    training call to hook, so they start one directly here. `finish_run` closes it
+    unchanged, whichever way it was opened.
+
+    Args:
+        run_name: Name for the run, e.g. `yolo26n-seg-engine-int8-cuda-b1`.
+        experiment_name: MLflow experiment; benchmark runs belong with the task they
+            measure, so this defaults to the segmentation experiment.
+        tracking_uri: MLflow tracking URI. Defaults to the project's local SQLite store.
+
+    Returns:
+        The new run's `run_id`.
+    """
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment(experiment_name)
+    return mlflow.start_run(run_name=run_name).info.run_id
+
+
 def make_run_name(model_family: str, variant: str) -> str:
     """Rename the active MLflow run to `{model_family}-{variant}-{run_id[:8]}`.
 
